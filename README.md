@@ -46,28 +46,35 @@ python -m bot
 
 ## Деплой на сервер
 
-На сервере от root:
+Git на свежем VPS может быть не установлен, а ставит его как раз скрипт —
+поэтому сам скрипт забираем через curl, а не клонированием.
 
 ```bash
-git clone https://github.com/TAAAAAAAAAAAAAAAAmik/RepJob.git /tmp/repjob
-sudo bash /tmp/repjob/deploy/install.sh
+curl -fsSL https://raw.githubusercontent.com/TAAAAAAAAAAAAAAAAmik/RepJob/claude/empty-repository-eskyes/deploy/install.sh -o install.sh
+sudo bash install.sh
 ```
 
-Скрипт идемпотентный — повторный запуск обновляет код и перезапускает
-сервис. Что он делает: ставит python и git, заводит системного пользователя
-`repjob` без shell и домашнего каталога, клонирует репозиторий в
-`/opt/repjob`, собирает venv, кладёт systemd-юнит и включает автозапуск.
-
-Дальше:
+Скрипт остановится и попросит вписать ключи:
 
 ```bash
-nano /opt/repjob/.env          # вписать BOT_TOKEN и DGIS_API_KEY
-systemctl start repjob-bot
-journalctl -u repjob-bot -f    # смотреть журнал
+nano /opt/repjob/.env          # BOT_TOKEN и DGIS_API_KEY
+sudo bash /opt/repjob/deploy/install.sh
 ```
+
+Второй запуск поднимет сервис и проверит, что тот действительно работает —
+если нет, покажет журнал. Дальше бот скажет, что пока никого не пускает:
+напиши ему `/id`, впиши номер в `BOT_ALLOWED_IDS` и перезапусти.
+
+Скрипт идемпотентный: этой же командой потом обновляется код. Что он
+делает — ставит python и git, заводит системного пользователя `repjob`
+без shell и домашнего каталога, клонирует репозиторий в `/opt/repjob`,
+собирает venv, кладёт systemd-юнит и включает автозапуск.
 
 Ключи лежат в `/opt/repjob/.env` с правами 600 у пользователя сервиса —
 в репозиторий они не попадают, `.env` в `.gitignore`.
+
+Нужен Debian или Ubuntu. На другой системе скрипт честно скажет об этом
+и не станет ничего ломать.
 
 ## Безопасность сервера
 

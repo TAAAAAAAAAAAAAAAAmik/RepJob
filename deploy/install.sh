@@ -2,7 +2,9 @@
 #
 # Установка бота на сервер. Запускать на самом сервере от root:
 #
-#   sudo bash deploy/install.sh
+#   curl -fsSL https://raw.githubusercontent.com/TAAAAAAAAAAAAAAAAmik/RepJob/\
+#     claude/empty-repository-eskyes/deploy/install.sh -o install.sh
+#   sudo bash install.sh
 #
 # Скрипт идемпотентный — можно гонять повторно для обновления.
 
@@ -17,7 +19,12 @@ BRANCH="${BRANCH:-claude/empty-repository-eskyes}"
 say() { printf '\n\033[1;32m==>\033[0m %s\n' "$1"; }
 die() { printf '\n\033[1;31mОшибка:\033[0m %s\n' "$1" >&2; exit 1; }
 
-[ "$(id -u)" -eq 0 ] || die "Нужен root: sudo bash deploy/install.sh"
+[ "$(id -u)" -eq 0 ] || die "Нужен root: sudo bash install.sh"
+
+command -v apt-get >/dev/null || die \
+    "Скрипт рассчитан на Debian или Ubuntu (нужен apt-get).
+   На другой системе поставь вручную python3, python3-venv и git,
+   дальше шаги те же — смотри README."
 
 # --------------------------------------------------------------- зависимости
 
@@ -58,27 +65,10 @@ python3 -m venv "$APP_DIR/.venv"
 # ------------------------------------------------------------------ ключи
 
 if [ ! -f "$APP_DIR/.env" ]; then
-    say "Создаю $APP_DIR/.env — заполни его перед запуском"
-    cat > "$APP_DIR/.env" <<'ENVFILE'
-# Токен от @BotFather
-BOT_TOKEN=
-
-# Ключ 2GIS Places API — https://dev.2gis.ru
-DGIS_API_KEY=
-
-# Кому можно пользоваться ботом. Свой номер узнаешь командой /id.
-# Несколько — через запятую. Пока пусто, бот не пустит никого.
-BOT_ALLOWED_IDS=
-
-# Границы отбора — можно не трогать
-BOT_RATING_MIN=3.0
-BOT_RATING_MAX=4.2
-BOT_MIN_REVIEWS=10
-ENVFILE
-    NEEDS_CONFIG=1
+    say "Создаю $APP_DIR/.env из шаблона — заполни его перед запуском"
+    cp "$APP_DIR/.env.example" "$APP_DIR/.env"
 else
     say "Файл .env уже есть, не трогаю"
-    NEEDS_CONFIG=0
 fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
@@ -91,23 +81,64 @@ install -m 644 "$APP_DIR/deploy/$SERVICE_NAME.service" "/etc/systemd/system/$SER
 systemctl daemon-reload
 systemctl enable --quiet "$SERVICE_NAME"
 
-if [ "$NEEDS_CONFIG" -eq 1 ]; then
+# ------------------------------------------------------------------ запуск
+
+# Ключи могли быть вписаны между прогонами, так что смотрим на файл,
+# а не на то, создали мы его только что или нет.
+get_env() { grep -E "^$1=" "$APP_DIR/.env" | head -1 | cut -d= -f2- | tr -d '"'"'"' '; }
+
+TOKEN_SET=$([ -n "$(get_env BOT_TOKEN)" ] && echo 1 || echo 0)
+KEY_SET=$([ -n "$(get_env DGIS_API_KEY)" ] && echo 1 || echo 0)
+
+if [ "$TOKEN_SET" -eq 0 ] || [ "$KEY_SET" -eq 0 ]; then
     cat <<EOF
 
-Почти всё. Осталось два шага:
+Почти всё. Осталось вписать ключи:
 
-  1. Заполнить ключи:   nano $APP_DIR/.env
-  2. Запустить:         systemctl start $SERVICE_NAME
+  nano $APP_DIR/.env
 
-Потом напиши боту /id, положи свой номер в BOT_ALLOWED_IDS и перезапусти:
-  systemctl restart $SERVICE_NAME
+Нужны BOT_TOKEN (от @BotFather) и DGIS_API_KEY (platform.2gis.ru).
+Потом запусти этот же скрипт ещё раз — он поднимет сервис и проверит,
+что тот живой:
+
+  sudo bash $APP_DIR/deploy/install.sh
 
 EOF
+    exit 0
+fi
+
+say "Запускаю сервис"
+systemctl restart "$SERVICE_NAME"
+sleep 4
+
+if systemctl is-active --quiet "$SERVICE_NAME"; then
+    # || true обязателен: без совпадения grep вернёт 1, а при pipefail
+    # это убило бы скрипт ровно в момент успешного запуска
+    BOT_NAME=$(journalctl -u "$SERVICE_NAME" --no-pager --lines=40 \
+        | grep -oP 'Запущен как \K@\S+' | tail -1 || true)
+
+    say "Бот работает${BOT_NAME:+: $BOT_NAME}"
+
+    if [ -z "$(get_env BOT_ALLOWED_IDS)" ]; then
+        cat <<EOF
+
+Последний шаг: бот пока никого не пускает.
+
+  1. Напиши ему команду /id — он ответит твоим номером
+  2. Впиши номер:  nano $APP_DIR/.env   →   BOT_ALLOWED_IDS=твой_номер
+  3. Перезапусти:  systemctl restart $SERVICE_NAME
+
+EOF
+    else
+        echo
+        echo "Всё готово. Пиши боту /find"
+        echo
+    fi
 else
-    say "Перезапускаю сервис"
-    systemctl restart "$SERVICE_NAME"
-    sleep 2
-    systemctl --no-pager --lines=10 status "$SERVICE_NAME" || true
+    printf '\n\033[1;31mСервис не поднялся.\033[0m Последние строки журнала:\n\n'
+    journalctl -u "$SERVICE_NAME" --no-pager --lines=25 || true
+    echo
+    die "Разберись по журналу выше и запусти скрипт заново."
 fi
 
 cat <<EOF
@@ -115,4 +146,5 @@ cat <<EOF
   журнал:      journalctl -u $SERVICE_NAME -f
   статус:      systemctl status $SERVICE_NAME
   перезапуск:  systemctl restart $SERVICE_NAME
+  обновление:  sudo bash $APP_DIR/deploy/install.sh
 EOF
