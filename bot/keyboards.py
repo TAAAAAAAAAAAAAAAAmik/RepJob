@@ -18,6 +18,7 @@ FIND = "🔍 Найти клиентов"
 CALC = "🧮 Калькулятор"
 LAST = "📄 Последняя выдача"
 HELP = "❓ Помощь"
+ADMIN = "⚙️ Доступы"
 
 NICHE_TITLES = {
     "красота": "💇 Красота",
@@ -31,17 +32,16 @@ NICHE_TITLES = {
 CALC_TARGETS = ("4.3", "4.5", "4.7")
 
 
-def main_menu() -> ReplyKeyboardMarkup:
-    """Постоянное меню под полем ввода."""
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=FIND)],
-            [KeyboardButton(text=CALC), KeyboardButton(text=LAST)],
-            [KeyboardButton(text=HELP)],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
+def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """Постоянное меню под полем ввода. Админам — лишний ряд."""
+    rows = [
+        [KeyboardButton(text=FIND)],
+        [KeyboardButton(text=CALC), KeyboardButton(text=LAST)],
+    ]
+    rows.append([KeyboardButton(text=HELP), KeyboardButton(text=ADMIN)]
+                if is_admin else [KeyboardButton(text=HELP)])
+
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
 
 
 def cities(recent: list[str]) -> InlineKeyboardMarkup:
@@ -90,3 +90,37 @@ def cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Отмена", callback_data="cancel"),
     ]])
+
+
+# ---------------------------------------------------------------- админка
+
+
+def admin_panel(users: list[tuple[int, dict]]) -> InlineKeyboardMarkup:
+    """Список выданных доступов: тап по строке — отозвать."""
+    builder = InlineKeyboardBuilder()
+
+    for user_id, info in users:
+        label = info.get("name") or info.get("username") or str(user_id)
+        builder.button(text=f"🚫 {label}", callback_data=f"revoke:{user_id}")
+
+    builder.button(text="➕ Выдать доступ", callback_data="admin:grant")
+    builder.button(text="🔄 Обновить", callback_data="admin:refresh")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def confirm_revoke(user_id: int, label: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"Да, забрать у {label}"[:60], callback_data=f"revoke_yes:{user_id}")
+    builder.button(text="Отмена", callback_data="admin:refresh")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def grant_request(user_id: int) -> InlineKeyboardMarkup:
+    """Кнопка под уведомлением о том, что кто-то постучался в бота."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Выдать доступ", callback_data=f"grant:{user_id}")
+    builder.button(text="🚷 Не сейчас", callback_data="grant:no")
+    builder.adjust(2)
+    return builder.as_markup()

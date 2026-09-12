@@ -11,6 +11,10 @@ class Config:
     bot_token: str
     dgis_api_key: str
     yandex_api_key: str = ""
+    # Админы: могут всё и раздают доступ остальным. Только из окружения —
+    # отобрать админку через чат нельзя, иначе можно запереть самого себя.
+    admin_ids: set[int] = field(default_factory=set)
+    # Доступы из окружения. Выданные из чата живут в state.json.
     allowed_ids: set[int] = field(default_factory=set)
 
     # Нужен, только если сервер ходит в интернет через прокси.
@@ -23,10 +27,14 @@ class Config:
 
     @property
     def access_configured(self) -> bool:
-        return bool(self.allowed_ids)
+        return bool(self.allowed_ids or self.admin_ids)
+
+    def is_admin(self, user_id: int) -> bool:
+        return user_id in self.admin_ids
 
     def is_allowed(self, user_id: int) -> bool:
-        return user_id in self.allowed_ids
+        """Доступ из окружения. Выданные из чата проверяет хранилище."""
+        return user_id in self.allowed_ids or user_id in self.admin_ids
 
 
 def _parse_ids(raw: str) -> set[int]:
@@ -57,6 +65,7 @@ def load() -> Config:
         bot_token=token,
         dgis_api_key=dgis_key,
         yandex_api_key=os.environ.get("YANDEX_API_KEY", "").strip(),
+        admin_ids=_parse_ids(os.environ.get("BOT_ADMIN_IDS", "")),
         allowed_ids=_parse_ids(os.environ.get("BOT_ALLOWED_IDS", "")),
         proxy=os.environ.get("BOT_PROXY", "").strip(),
         max_pages=min(int(os.environ.get("BOT_MAX_PAGES", "5")), 5),

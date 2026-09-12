@@ -76,7 +76,7 @@ class StorageTest(unittest.TestCase):
         s = self.store()
         s.remember_city(77, "Нижний Новгород")
         data = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(data["77"]["cities"], ["Нижний Новгород"])
+        self.assertEqual(data["users"]["77"]["cities"], ["Нижний Новгород"])
 
     def test_forget(self):
         s = self.store()
@@ -113,8 +113,13 @@ class CityKeyboardTest(unittest.TestCase):
     def test_main_menu_labels_match_handler_filters(self):
         from bot.handlers import MENU_LABELS
 
-        labels = {b.text for row in kb.main_menu().keyboard for b in row}
+        labels = {b.text for row in kb.main_menu(is_admin=True).keyboard for b in row}
         self.assertEqual(labels, set(MENU_LABELS))
+
+    def test_admin_button_hidden_from_ordinary_users(self):
+        plain = {b.text for row in kb.main_menu().keyboard for b in row}
+        self.assertNotIn(kb.ADMIN, plain)
+        self.assertIn(kb.ADMIN, {b.text for row in kb.main_menu(True).keyboard for b in row})
 
     def test_niche_keyboard_offers_way_back(self):
         payloads = [b.callback_data for row in kb.niches().inline_keyboard for b in row]

@@ -125,7 +125,7 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
 Последний шаг: бот пока никого не пускает.
 
   1. Напиши ему команду /id — он ответит твоим номером
-  2. Впиши номер:  nano $APP_DIR/.env   →   BOT_ALLOWED_IDS=твой_номер
+  2. Впиши номер:  nano $APP_DIR/.env   →   BOT_ADMIN_IDS=твой_номер
   3. Перезапусти:  systemctl restart $SERVICE_NAME
 
 EOF

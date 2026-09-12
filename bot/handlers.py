@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from html import escape
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, F, Router
@@ -23,7 +25,7 @@ router = Router()
 
 # Нажатия меню не должны утекать в поля ввода мастеров: без этого
 # тап по «Калькулятору» посреди ввода города примется за название города.
-MENU_LABELS = frozenset({kb.FIND, kb.CALC, kb.LAST, kb.HELP})
+MENU_LABELS = frozenset({kb.FIND, kb.CALC, kb.LAST, kb.HELP, kb.ADMIN})
 NOT_MENU = ~F.text.in_(MENU_LABELS)
 
 # Телеграм режет сообщения на 4096 символах — держимся ниже с запасом
@@ -49,7 +51,11 @@ HELP = """<b>Поиск клиентов на работу с репутацие
 
 
 class AccessMiddleware(BaseMiddleware):
-    """Пускает только своих. /id доступен всем, чтобы узнать свой номер."""
+    """Пускает админов, выданные доступы и жёстко заданные в окружении.
+
+    Остальным отказывает и сообщает админам, кто постучался: просить
+    у человека его ID и вписывать руками — лишний шаг.
+    """
 
     def __init__(self, config: Config):
         self.config = config
@@ -68,21 +74,48 @@ class AccessMiddleware(BaseMiddleware):
         if text.startswith("/id"):
             return await handler(event, data)
 
+        storage: Storage | None = data.get("storage")
+
+        if self.config.is_allowed(user.id) or (storage and storage.is_allowed(user.id)):
+            return await handler(event, data)
+
         if not self.config.access_configured:
             await self._deny(
                 event,
                 "Доступ к боту пока никому не выдан.\n\n"
                 f"Твой Telegram ID: <code>{user.id}</code>\n"
-                "Добавь его в <code>BOT_ALLOWED_IDS</code> и перезапусти бота.",
+                "Добавь его в <code>BOT_ADMIN_IDS</code> и перезапусти бота.",
             )
             return None
 
-        if not self.config.is_allowed(user.id):
-            log.warning("Отказано в доступе: %s (@%s)", user.id, user.username)
-            await self._deny(event, "Этот бот закрытый.")
-            return None
+        log.warning("Отказано в доступе: %s (@%s)", user.id, user.username)
+        await self._deny(event, "Бот закрытый. Владельцу отправлен запрос — дождись ответа.")
+        await self._notify_admins(data.get("bot"), storage, user)
+        return None
 
-        return await handler(event, data)
+    async def _notify_admins(self, bot: Any, storage: Storage | None, user: Any) -> None:
+        if bot is None or storage is None or not self.config.admin_ids:
+            return
+
+        name = getattr(user, "full_name", "") or ""
+        username = getattr(user, "username", "") or ""
+
+        # Один и тот же человек не должен дёргать админа каждым сообщением
+        if not storage.should_notify(user.id, name, username):
+            return
+
+        nick = f"@{username}" if username else "без ника"
+        text = (
+            "🔔 В бота постучались\n\n"
+            f"<b>{escape(name) or 'без имени'}</b> ({escape(nick)})\n"
+            f"ID: <code>{user.id}</code>"
+        )
+
+        for admin_id in self.config.admin_ids:
+            try:
+                await bot.send_message(admin_id, text, reply_markup=kb.grant_request(user.id))
+            except Exception:
+                log.warning("Не смог уведомить админа %s", admin_id)
 
     @staticmethod
     async def _deny(event: TelegramObject, text: str) -> None:
@@ -96,24 +129,28 @@ class Flow(StatesGroup):
     city = State()      # ждём название города текстом
     calc = State()      # ждём «рейтинг отзывов»
     target = State()    # ждём выбор цели кнопкой
+    grant = State()     # ждём ID или пересланное сообщение
 
 
 # ------------------------------------------------------------------- вход
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, config: Config) -> None:
     await state.clear()
     await message.answer(
         "Готов искать клиентов. Пользуйся кнопками снизу.",
-        reply_markup=kb.main_menu(),
+        reply_markup=kb.main_menu(config.is_admin(message.from_user.id)),
     )
 
 
 @router.message(Command("help"))
 @router.message(F.text == kb.HELP)
-async def show_help(message: Message) -> None:
-    await message.answer(_help_text(), reply_markup=kb.main_menu())
+async def show_help(message: Message, config: Config) -> None:
+    await message.answer(
+        _help_text(config.is_admin(message.from_user.id)),
+        reply_markup=kb.main_menu(config.is_admin(message.from_user.id)),
+    )
 
 
 @router.message(Command("id"))
@@ -315,10 +352,7 @@ def _parse_calc(parts: list[str]) -> tuple[float, int, float] | None:
 
 async def _send_calc(message: Message, rating: float, count: int, target: float) -> None:
     needed = reviews_needed_for(rating, count, target)
-    await message.answer(
-        formatting.calc_message(rating, count, target, needed),
-        reply_markup=kb.main_menu(),
-    )
+    await message.answer(formatting.calc_message(rating, count, target, needed))
 
 
 # ------------------------------------------------------------------ выгрузка
@@ -413,10 +447,236 @@ async def _send_csv(message: Message, result: search.SearchResult) -> None:
     )
 
 
-def _help_text() -> str:
-    return HELP.format(
+def _help_text(is_admin: bool = False) -> str:
+    text = HELP.format(
         find=kb.FIND, calc=kb.CALC, last=kb.LAST,
         rmin=search.RATING_MIN,
         rmax=search.RATING_MAX,
         reviews=search.MIN_REVIEWS,
+    )
+    if is_admin:
+        text += (
+            f"\n\n<b>{kb.ADMIN}</b> — выдать и забрать доступ. "
+            "Когда в бота стучится новый человек, приходит уведомление "
+            "с кнопкой: жать её быстрее, чем спрашивать ID."
+        )
+    return text
+
+
+# ------------------------------------------------------------------ админка
+#
+# Права проверяются в каждом обработчике отдельно. Middleware пускает всех
+# с доступом, а callback_data видно любому, кто до неё доберётся, — без
+# проверки рядовой пользователь мог бы раздавать и отбирать доступы.
+
+
+def _deny_if_not_admin(user_id: int, config: Config) -> bool:
+    if config.is_admin(user_id):
+        return False
+    log.warning("Попытка залезть в админку: %s", user_id)
+    return True
+
+
+def _user_label(user_id: int, info: dict[str, Any]) -> str:
+    name = info.get("name") or ""
+    username = info.get("username") or ""
+    if name and username:
+        return f"{name} (@{username})"
+    return name or (f"@{username}" if username else str(user_id))
+
+
+def _panel_text(config: Config, storage: Storage) -> str:
+    users = storage.allowed_users()
+
+    lines = ["<b>Доступы к боту</b>", ""]
+    lines.append(f"Админов: {len(config.admin_ids)} — забрать можно только через <code>.env</code>")
+
+    if config.allowed_ids - config.admin_ids:
+        lines.append(f"Задано в окружении: {len(config.allowed_ids - config.admin_ids)}")
+
+    lines.append("")
+    if not users:
+        lines.append("Выданных из чата доступов пока нет.")
+        lines.append("Жми «Выдать доступ» или дождись, пока человек напишет боту.")
+        return "\n".join(lines)
+
+    lines.append(f"Выдано из чата: <b>{len(users)}</b>")
+    lines.append("")
+    for user_id, info in users:
+        when = info.get("granted_at")
+        stamp = datetime.fromtimestamp(when).strftime("%d.%m.%Y") if when else "—"
+        lines.append(f"• {escape(_user_label(user_id, info))}")
+        lines.append(f"   <code>{user_id}</code> · с {stamp}")
+    lines.append("")
+    lines.append("Тап по имени — забрать доступ.")
+    return "\n".join(lines)
+
+
+@router.message(Command("admin"))
+@router.message(F.text == kb.ADMIN)
+async def open_panel(message: Message, state: FSMContext, config: Config, storage: Storage) -> None:
+    if _deny_if_not_admin(message.from_user.id, config):
+        return
+    await state.clear()
+    await message.answer(
+        _panel_text(config, storage),
+        reply_markup=kb.admin_panel(storage.allowed_users()),
+    )
+
+
+@router.callback_query(F.data == "admin:refresh")
+async def refresh_panel(callback: CallbackQuery, state: FSMContext, config: Config, storage: Storage) -> None:
+    await callback.answer()
+    if _deny_if_not_admin(callback.from_user.id, config):
+        return
+    await state.clear()
+
+    text = _panel_text(config, storage)
+    markup = kb.admin_panel(storage.allowed_users())
+    # Телеграм ругается, если новый текст совпадает со старым
+    if callback.message.html_text != text:
+        await callback.message.edit_text(text, reply_markup=markup)
+    else:
+        await callback.message.edit_reply_markup(reply_markup=markup)
+
+
+@router.callback_query(F.data == "admin:grant")
+async def ask_grant(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+    await callback.answer()
+    if _deny_if_not_admin(callback.from_user.id, config):
+        return
+
+    await state.set_state(Flow.grant)
+    await callback.message.answer(
+        "Пришли <b>ID</b> человека — или перешли сюда любое его сообщение.\n\n"
+        "Свой ID он узнаёт командой <code>/id</code>. Если просто напишет боту, "
+        "тебе придёт уведомление с кнопкой, и спрашивать ничего не придётся.",
+        reply_markup=kb.cancel(),
+    )
+
+
+@router.message(Flow.grant, F.text, NOT_MENU)
+async def grant_by_text(message: Message, state: FSMContext, config: Config, storage: Storage) -> None:
+    if _deny_if_not_admin(message.from_user.id, config):
+        await state.clear()
+        return
+
+    # Пересланное сообщение выдаёт отправителя — если тот не скрыл его настройками
+    forwarded = getattr(message, "forward_from", None)
+    if forwarded is not None:
+        await _do_grant(message, storage, forwarded.id,
+                        getattr(forwarded, "full_name", ""), forwarded.username or "",
+                        by=message.from_user.id)
+        await state.clear()
+        return
+
+    raw = (message.text or "").strip()
+    if not raw.lstrip("-").isdigit():
+        await message.answer(
+            "Это не похоже на ID. Нужно число, например <code>6887373040</code>.\n"
+            "Либо перешли сюда сообщение от человека."
+        )
+        return
+
+    info = storage.pending_info(int(raw))
+    await _do_grant(message, storage, int(raw),
+                    info.get("name", ""), info.get("username", ""),
+                    by=message.from_user.id)
+    await state.clear()
+
+
+@router.message(Flow.grant, F.forward_from)
+async def grant_by_forward(message: Message, state: FSMContext, config: Config, storage: Storage) -> None:
+    if _deny_if_not_admin(message.from_user.id, config):
+        await state.clear()
+        return
+
+    person = message.forward_from
+    await _do_grant(message, storage, person.id,
+                    getattr(person, "full_name", ""), person.username or "",
+                    by=message.from_user.id)
+    await state.clear()
+
+
+async def _do_grant(
+    message: Message, storage: Storage, user_id: int,
+    name: str, username: str, by: int,
+) -> None:
+    storage.grant(user_id, name=name, username=username, by=by)
+    label = _user_label(user_id, {"name": name, "username": username})
+
+    await message.answer(f"✅ Доступ выдан: <b>{escape(label)}</b>")
+
+    # Сообщаем человеку сами: иначе он не узнает и будет ждать
+    try:
+        await message.bot.send_message(
+            user_id,
+            "Доступ к боту открыт. Нажми /start, чтобы начать.",
+        )
+    except Exception:
+        await message.answer(
+            "Предупредить его не смог — он должен сам написать боту хотя бы раз, "
+            "иначе Telegram не даёт писать первым."
+        )
+
+
+@router.callback_query(F.data.startswith("grant:"))
+async def grant_from_request(callback: CallbackQuery, config: Config, storage: Storage) -> None:
+    await callback.answer()
+    if _deny_if_not_admin(callback.from_user.id, config):
+        return
+
+    choice = callback.data.split(":", 1)[1]
+    if choice == "no":
+        await callback.message.edit_text("Отклонено. Доступ не выдан.")
+        return
+
+    user_id = int(choice)
+    info = storage.pending_info(user_id)
+    storage.grant(user_id, name=info.get("name", ""), username=info.get("username", ""),
+                  by=callback.from_user.id)
+
+    label = _user_label(user_id, info)
+    await callback.message.edit_text(f"✅ Доступ выдан: <b>{escape(label)}</b>")
+
+    try:
+        await callback.bot.send_message(user_id, "Доступ к боту открыт. Нажми /start, чтобы начать.")
+    except Exception:
+        log.warning("Не смог сообщить %s о выданном доступе", user_id)
+
+
+@router.callback_query(F.data.startswith("revoke:"))
+async def ask_revoke(callback: CallbackQuery, config: Config, storage: Storage) -> None:
+    await callback.answer()
+    if _deny_if_not_admin(callback.from_user.id, config):
+        return
+
+    user_id = int(callback.data.split(":", 1)[1])
+    info = dict(storage.allowed_users()).get(user_id, {})
+    label = _user_label(user_id, info)
+
+    await callback.message.edit_text(
+        f"Забрать доступ у <b>{escape(label)}</b>?\n<code>{user_id}</code>",
+        reply_markup=kb.confirm_revoke(user_id, label),
+    )
+
+
+@router.callback_query(F.data.startswith("revoke_yes:"))
+async def do_revoke(callback: CallbackQuery, config: Config, storage: Storage) -> None:
+    await callback.answer()
+    if _deny_if_not_admin(callback.from_user.id, config):
+        return
+
+    user_id = int(callback.data.split(":", 1)[1])
+    info = dict(storage.allowed_users()).get(user_id, {})
+    label = _user_label(user_id, info)
+
+    if storage.revoke(user_id):
+        await callback.message.edit_text(f"🚫 Доступ забран: <b>{escape(label)}</b>")
+    else:
+        await callback.message.edit_text("Доступа и так не было.")
+
+    await callback.message.answer(
+        _panel_text(config, storage),
+        reply_markup=kb.admin_panel(storage.allowed_users()),
     )

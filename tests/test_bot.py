@@ -148,6 +148,9 @@ class WiringTest(unittest.TestCase):
             keyboards.niches(), keyboards.niches(city_known=False),
             keyboards.calc_targets(), keyboards.results(), keyboards.cancel(),
             keyboards.cities(["Казань", "Пермь"]),
+            keyboards.admin_panel([(111, {"name": "Гость"})]),
+            keyboards.confirm_revoke(111, "Гость"),
+            keyboards.grant_request(111),
         ):
             for row in markup.inline_keyboard:
                 for button in row:
