@@ -1,0 +1,39 @@
+[Unit]
+Description=RepJob — бот поиска клиентов на работу с репутацией
+Documentation=https://github.com/TAAAAAAAAAAAAAAAAmik/RepJob
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=repjob
+Group=repjob
+WorkingDirectory=/opt/repjob
+
+# Ключи и токен лежат здесь, файл с правами 600 — в git его быть не должно
+EnvironmentFile=/opt/repjob/.env
+
+ExecStart=/opt/repjob/.venv/bin/python -m bot
+
+# Телеграм иногда рвёт long polling — поднимаемся сами
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=repjob-bot
+
+# Боту нужен только исходящий HTTPS, всё остальное закрываем
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/repjob
+
+[Install]
+WantedBy=multi-user.target
