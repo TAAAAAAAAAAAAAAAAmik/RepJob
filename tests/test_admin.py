@@ -174,9 +174,12 @@ class MiddlewareAccessTest(unittest.TestCase):
 
     def setUp(self):
         import asyncio
+        import types
+
         from bot.handlers import AccessMiddleware
 
         self.asyncio = asyncio
+        self.types = types
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Storage(Path(self.tmp.name) / "state.json")
         self.cfg = Config(bot_token="t", dgis_api_key="k", admin_ids={ADMIN})
@@ -232,37 +235,166 @@ class MiddlewareAccessTest(unittest.TestCase):
         # Иначе человеку неоткуда узнать свой номер, чтобы попросить доступ
         self.assertTrue(self.run_through(GUEST, text="/id"))
 
-    def test_admin_is_notified_about_the_stranger(self):
+    def test_stranger_gets_the_request_button(self):
+        """Незнакомцу нужна кнопка: без неё он не может попросить доступ.
+
+        Событие здесь — настоящий Message, а не заглушка: ветка отказа
+        проверяет тип через isinstance и подделку просто не заметит.
+        """
+        import datetime
+
+        from aiogram.types import Chat, Message
+
+        captured = {}
+
+        class Probe(Message):
+            async def answer(self, text=None, **kw):
+                captured["text"] = text
+                captured["markup"] = kw.get("reply_markup")
+
+        event = Probe(
+            message_id=1, date=datetime.datetime.now(),
+            chat=Chat(id=GUEST, type="private"), text="привет",
+        )
+
+        async def handler(ev, data):
+            return None
+
+        data = {
+            "event_from_user": self.types.SimpleNamespace(
+                id=GUEST, username="guest", full_name="Гость"),
+            "storage": self.store,
+            "bot": None,
+        }
+        self.asyncio.run(self.middleware(handler, event, data))
+
+        payloads = [
+            b.callback_data
+            for row in captured["markup"].inline_keyboard for b in row
+        ]
+        self.assertEqual(payloads, [kb.ACCESS_REQUEST])
+        self.assertIn("Доступ выдаётся вручную", captured["text"])
+
+    def test_request_button_itself_passes_the_middleware(self):
+        """Иначе нажать её было бы некому: middleware блокирует чужие callback."""
         import types
 
-        sent = []
+        called = []
 
-        class FakeBot:
-            async def send_message(self, chat_id, text, **kw):
-                sent.append((chat_id, text))
+        async def handler(event, data):
+            called.append(True)
 
-        self.run_through(GUEST, bot=FakeBot())
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0][0], ADMIN)
-        self.assertIn(str(GUEST), sent[0][1])
+        async def answer(*a, **kw):
+            return None
 
-    def test_admin_is_not_spammed_by_repeat_knocks(self):
+        event = types.SimpleNamespace(data=kb.ACCESS_REQUEST, answer=answer)
+        data = {
+            "event_from_user": types.SimpleNamespace(
+                id=GUEST, username="guest", full_name="Гость"),
+            "storage": self.store,
+            "bot": None,
+        }
+        self.asyncio.run(self.middleware(handler, event, data))
+        self.assertTrue(called)
+
+    def test_middleware_no_longer_notifies_on_its_own(self):
+        """Уведомление шлётся только по нажатию кнопки: случайный заход
+        в бота не должен дёргать админа."""
         sent = []
 
         class FakeBot:
             async def send_message(self, chat_id, text, **kw):
                 sent.append(chat_id)
 
-        bot = FakeBot()
-        self.run_through(GUEST, bot=bot)
-        self.run_through(GUEST, bot=bot)
-        self.run_through(GUEST, bot=bot)
-        self.assertEqual(len(sent), 1)
+        self.run_through(GUEST, bot=FakeBot())
+        self.assertEqual(sent, [])
 
-    def test_broken_admin_chat_does_not_break_the_denial(self):
-        class BrokenBot:
-            async def send_message(self, *a, **kw):
-                raise RuntimeError("админ заблокировал бота")
 
-        # Отказ должен отработать, даже если уведомить некого
-        self.assertFalse(self.run_through(GUEST, bot=BrokenBot()))
+class AccessRequestTest(unittest.TestCase):
+    """Кнопка «Хочу доступ»: заявка уходит админу, ответ виден человеку."""
+
+    def setUp(self):
+        import asyncio
+        import types
+
+        self.asyncio = asyncio
+        self.types = types
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Storage(Path(self.tmp.name) / "state.json")
+        self.cfg = Config(bot_token="t", dgis_api_key="k", admin_ids={ADMIN})
+        self.sent = []
+        self.alerts = []
+        self.edits = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def press(self, user_id=GUEST, cfg=None, failing=False):
+        from bot.handlers import ask_for_access
+
+        outer = self
+
+        class FakeBot:
+            async def send_message(self, chat_id, text, **kw):
+                if failing:
+                    raise RuntimeError("админ заблокировал бота")
+                outer.sent.append((chat_id, text))
+
+        class FakeMessage:
+            async def edit_text(self, text, **kw):
+                outer.edits.append(text)
+
+        async def answer(text=None, **kw):
+            outer.alerts.append(text)
+
+        callback = self.types.SimpleNamespace(
+            from_user=self.types.SimpleNamespace(
+                id=user_id, username="guest", full_name="Гость Гостев"),
+            bot=FakeBot(),
+            message=FakeMessage(),
+            answer=answer,
+        )
+        self.asyncio.run(ask_for_access(callback, cfg or self.cfg, self.store))
+
+    def test_admin_gets_id_and_a_grant_button(self):
+        self.press()
+        self.assertEqual(len(self.sent), 1)
+
+        chat_id, text = self.sent[0]
+        self.assertEqual(chat_id, ADMIN)
+        self.assertIn(str(GUEST), text)
+        self.assertIn("Гость Гостев", text)
+
+    def test_person_is_told_the_request_went_out(self):
+        self.press()
+        self.assertTrue(any("отправлена" in a for a in self.alerts))
+        self.assertTrue(any("отправлена" in e for e in self.edits))
+
+    def test_name_is_remembered_for_the_grant(self):
+        self.press()
+        self.assertEqual(self.store.pending_info(GUEST)["name"], "Гость Гостев")
+
+    def test_second_press_does_not_spam_the_admin(self):
+        self.press()
+        self.press()
+        self.assertEqual(len(self.sent), 1)
+        self.assertTrue(any("уже отправлена" in a for a in self.alerts))
+
+    def test_already_granted_is_told_so(self):
+        self.store.grant(GUEST, name="Гость")
+        self.press()
+        self.assertEqual(self.sent, [])
+        self.assertTrue(any("уже есть" in a for a in self.alerts))
+
+    def test_without_admins_the_person_is_not_left_guessing(self):
+        cfg = Config(bot_token="t", dgis_api_key="k")
+        self.press(cfg=cfg)
+        self.assertEqual(self.sent, [])
+        self.assertTrue(any("некому" in a for a in self.alerts))
+
+    def test_undelivered_request_is_reported_honestly(self):
+        # Админ заблокировал бота — человек должен узнать, а не ждать впустую
+        self.press(failing=True)
+        self.assertEqual(self.sent, [])
+        self.assertTrue(any("Не получилось" in a for a in self.alerts))
+        self.assertEqual(self.edits, [])

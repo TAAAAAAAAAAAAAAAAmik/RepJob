@@ -31,6 +31,10 @@ NICHE_TITLES = {
 
 CALC_TARGETS = ("4.3", "4.5", "4.7")
 
+# Единственная кнопка, доступная тем, у кого доступа ещё нет.
+# Middleware пропускает её по этому значению, поэтому оно — константа.
+ACCESS_REQUEST = "req:access"
+
 
 def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Постоянное меню под полем ввода. Админам — лишний ряд."""
@@ -125,3 +129,10 @@ def grant_request(user_id: int) -> InlineKeyboardMarkup:
     builder.button(text="🚷 Не сейчас", callback_data="grant:no")
     builder.adjust(2)
     return builder.as_markup()
+
+
+def request_access() -> InlineKeyboardMarkup:
+    """То, что видит человек без доступа."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🙋 Хочу доступ", callback_data=ACCESS_REQUEST),
+    ]])

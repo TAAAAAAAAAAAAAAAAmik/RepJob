@@ -50,11 +50,18 @@ HELP = """<b>Поиск клиентов на работу с репутацие
 Есть и команды, если так быстрее: /find, /calc, /csv, /id"""
 
 
+WELCOME_STRANGER = """Привет! Это внутренний бот — он подбирает компании,
+которым нужна работа с репутацией.
+
+Доступ выдаётся вручную. Если тебя сюда позвали — жми кнопку,
+владельцу придёт заявка."""
+
+
 class AccessMiddleware(BaseMiddleware):
     """Пускает админов, выданные доступы и жёстко заданные в окружении.
 
-    Остальным отказывает и сообщает админам, кто постучался: просить
-    у человека его ID и вписывать руками — лишний шаг.
+    Остальным показывает кнопку заявки. Сама заявка отправляется только
+    по нажатию: иначе админа дёргал бы любой случайный заход.
     """
 
     def __init__(self, config: Config):
@@ -70,8 +77,12 @@ class AccessMiddleware(BaseMiddleware):
         if user is None:
             return await handler(event, data)
 
+        # Message и CallbackQuery — разные типы, поля берём безопасно
         text = getattr(event, "text", "") or ""
-        if text.startswith("/id"):
+        payload = getattr(event, "data", "") or ""
+
+        # Заявку на доступ обязаны пропустить: иначе нажать её некому
+        if text.startswith("/id") or payload == kb.ACCESS_REQUEST:
             return await handler(event, data)
 
         storage: Storage | None = data.get("storage")
@@ -88,39 +99,15 @@ class AccessMiddleware(BaseMiddleware):
             )
             return None
 
-        log.warning("Отказано в доступе: %s (@%s)", user.id, user.username)
-        await self._deny(event, "Бот закрытый. Владельцу отправлен запрос — дождись ответа.")
-        await self._notify_admins(data.get("bot"), storage, user)
+        log.info("Без доступа: %s (@%s)", user.id, user.username)
+        await self._deny(event, WELCOME_STRANGER, with_button=True)
         return None
 
-    async def _notify_admins(self, bot: Any, storage: Storage | None, user: Any) -> None:
-        if bot is None or storage is None or not self.config.admin_ids:
-            return
-
-        name = getattr(user, "full_name", "") or ""
-        username = getattr(user, "username", "") or ""
-
-        # Один и тот же человек не должен дёргать админа каждым сообщением
-        if not storage.should_notify(user.id, name, username):
-            return
-
-        nick = f"@{username}" if username else "без ника"
-        text = (
-            "🔔 В бота постучались\n\n"
-            f"<b>{escape(name) or 'без имени'}</b> ({escape(nick)})\n"
-            f"ID: <code>{user.id}</code>"
-        )
-
-        for admin_id in self.config.admin_ids:
-            try:
-                await bot.send_message(admin_id, text, reply_markup=kb.grant_request(user.id))
-            except Exception:
-                log.warning("Не смог уведомить админа %s", admin_id)
-
     @staticmethod
-    async def _deny(event: TelegramObject, text: str) -> None:
+    async def _deny(event: TelegramObject, text: str, with_button: bool = False) -> None:
+        markup = kb.request_access() if with_button else None
         if isinstance(event, Message):
-            await event.answer(text)
+            await event.answer(text, reply_markup=markup)
         elif isinstance(event, CallbackQuery):
             await event.answer(text.split("\n")[0], show_alert=True)
 
@@ -713,3 +700,51 @@ async def do_revoke(callback: CallbackQuery, config: Config, storage: Storage) -
         _panel_text(config, storage),
         reply_markup=kb.admin_panel(storage.allowed_users()),
     )
+
+
+@router.callback_query(F.data == kb.ACCESS_REQUEST)
+async def ask_for_access(callback: CallbackQuery, config: Config, storage: Storage) -> None:
+    """Заявка от человека без доступа. Единственное, что ему разрешено."""
+    user = callback.from_user
+
+    # Уже пустили, пока он жал кнопку
+    if config.is_allowed(user.id) or storage.is_allowed(user.id):
+        await callback.answer("Доступ уже есть — нажми /start", show_alert=True)
+        return
+
+    name = user.full_name or ""
+    username = user.username or ""
+
+    # Повторные нажатия не должны заваливать админа
+    if not storage.should_notify(user.id, name, username):
+        await callback.answer("Заявка уже отправлена, ждём ответа.", show_alert=True)
+        return
+
+    if not config.admin_ids:
+        await callback.answer("Заявку принять некому: у бота не настроен админ.", show_alert=True)
+        return
+
+    nick = f"@{username}" if username else "без ника"
+    text = (
+        "🙋 <b>Запрос доступа</b>\n\n"
+        f"{escape(name) or 'без имени'} ({escape(nick)})\n"
+        f"ID: <code>{user.id}</code>"
+    )
+
+    delivered = 0
+    for admin_id in config.admin_ids:
+        try:
+            await callback.bot.send_message(
+                admin_id, text, reply_markup=kb.grant_request(user.id),
+            )
+            delivered += 1
+        except Exception:
+            log.warning("Не смог доставить заявку админу %s", admin_id)
+
+    if delivered:
+        await callback.answer("Заявка отправлена. Дождись ответа.", show_alert=True)
+        await callback.message.edit_text(
+            "✅ Заявка отправлена.\n\nКак только доступ выдадут, бот напишет сюда сам.",
+        )
+    else:
+        await callback.answer("Не получилось отправить заявку. Напиши владельцу напрямую.", show_alert=True)

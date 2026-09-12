@@ -151,6 +151,7 @@ class WiringTest(unittest.TestCase):
             keyboards.admin_panel([(111, {"name": "Гость"})]),
             keyboards.confirm_revoke(111, "Гость"),
             keyboards.grant_request(111),
+            keyboards.request_access(),
         ):
             for row in markup.inline_keyboard:
                 for button in row:
