@@ -31,25 +31,71 @@ mkdir -p "$APP_DIR"
 curl -fsSL "$TARBALL" | tar -xz -C "$APP_DIR" --strip-components=1
 
 # ------------------------------------------------------------- зависимости
+#
+# На урезанных образах Ubuntu вырезают и venv, и pip, а доставить их
+# пакетным менеджером без root нельзя. Поэтому идём по цепочке: штатный
+# venv → поднимаем pip в домашний каталог → virtualenv → как есть.
 
 PY=""
+REQ="$APP_DIR/requirements.txt"
 
-if python3 -m venv "$APP_DIR/.venv" >/dev/null 2>&1; then
-    say "Собираю виртуальное окружение"
-    PY="$APP_DIR/.venv/bin/python"
-    "$PY" -m pip install --quiet --upgrade pip
-    "$PY" -m pip install --quiet -r "$APP_DIR/requirements.txt"
-else
-    # Модуль venv есть не во всех урезанных образах, а доставить его без
-    # root нельзя. Тогда ставим пакеты в домашний каталог пользователя.
-    say "Модуль venv недоступен, ставлю зависимости в домашний каталог"
+# На свежих системах действует PEP 668: установка в домашний каталог
+# требует явного флага. Он трогает только ~/.local, систему не ломает.
+pip_user() {
+    python3 -m pip install --quiet --user "$@" 2>/dev/null \
+    || python3 -m pip install --quiet --user --break-system-packages "$@"
+}
+
+have_pip() { python3 -m pip --version >/dev/null 2>&1; }
+
+setup_python() {
+    # 1. Штатный venv — лучший вариант, изолирован и ничего не трогает
+    if python3 -m venv "$APP_DIR/.venv" >/dev/null 2>&1 \
+       && "$APP_DIR/.venv/bin/python" -m pip --version >/dev/null 2>&1; then
+        say "Собираю виртуальное окружение"
+        PY="$APP_DIR/.venv/bin/python"
+        "$PY" -m pip install --quiet --upgrade pip >/dev/null 2>&1 || true
+        "$PY" -m pip install --quiet -r "$REQ" && return 0
+    fi
+    rm -rf "$APP_DIR/.venv"
+
+    # 2. venv нет — сначала добываем pip
+    if ! have_pip; then
+        say "Ни venv, ни pip в системе нет — поднимаю pip в домашний каталог"
+        python3 -m ensurepip --upgrade --user >/dev/null 2>&1 || true
+
+        if ! have_pip; then
+            say "Скачиваю установщик pip"
+            curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$APP_DIR/.get-pip.py" \
+                && python3 "$APP_DIR/.get-pip.py" --user --quiet >/dev/null 2>&1 || true
+            rm -f "$APP_DIR/.get-pip.py"
+        fi
+    fi
+
+    have_pip || return 1
+
+    # 3. С pip на руках собираем изолированное окружение через virtualenv:
+    #    он не требует системного модуля venv и обходит запрет PEP 668
+    if pip_user virtualenv >/dev/null 2>&1 \
+       && python3 -m virtualenv "$APP_DIR/.venv" >/dev/null 2>&1 \
+       && "$APP_DIR/.venv/bin/python" -m pip install --quiet -r "$REQ"; then
+        say "Собрал окружение через virtualenv"
+        PY="$APP_DIR/.venv/bin/python"
+        return 0
+    fi
+    rm -rf "$APP_DIR/.venv"
+
+    # 4. Последний вариант: пакеты прямо в ~/.local, запуск системным python
+    say "Ставлю зависимости в домашний каталог"
+    pip_user -r "$REQ" || return 1
     PY="python3"
-    python3 -m pip install --quiet --user --break-system-packages \
-        -r "$APP_DIR/requirements.txt" 2>/dev/null \
-    || python3 -m pip install --quiet --user -r "$APP_DIR/requirements.txt" \
-    || die "Не удалось поставить зависимости. Покажи вывод команды:
-   python3 -m pip install --user -r $APP_DIR/requirements.txt"
-fi
+    return 0
+}
+
+setup_python || die "Не удалось поставить зависимости.
+   Покажи вывод этих двух команд:
+     python3 -m ensurepip --upgrade --user
+     python3 -m pip install --user -r $REQ"
 
 # ------------------------------------------------------------------ ключи
 
