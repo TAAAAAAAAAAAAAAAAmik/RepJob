@@ -119,7 +119,7 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
 
     say "Бот работает${BOT_NAME:+: $BOT_NAME}"
 
-    if [ -z "$(get_env BOT_ALLOWED_IDS)" ]; then
+    if [ -z "$(get_env BOT_ADMIN_IDS)" ] && [ -z "$(get_env BOT_ALLOWED_IDS)" ]; then
         cat <<EOF
 
 Последний шаг: бот пока никого не пускает.

@@ -201,7 +201,7 @@ if bot_is_running "$APP_DIR"; then
     BOT_NAME=$(grep -oP 'Запущен как \K@\S+' "$APP_DIR/bot.log" 2>/dev/null | tail -1 || true)
     say "Бот работает${BOT_NAME:+: $BOT_NAME}"
 
-    if [ -z "$(get_env BOT_ALLOWED_IDS)" ]; then
+    if [ -z "$(get_env BOT_ADMIN_IDS)" ] && [ -z "$(get_env BOT_ALLOWED_IDS)" ]; then
         cat <<EOF
 
 Последний шаг: бот пока никого не пускает.
