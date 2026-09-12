@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from leadfinder import dgis, export, presets, scoring  # noqa: E402
+from leadfinder import dgis, export, presets, scoring, yandex  # noqa: E402
 from leadfinder.cli import load_demo  # noqa: E402
 from leadfinder.models import Company, is_target, reviews_needed_for  # noqa: E402
 
@@ -242,3 +242,67 @@ class DemoPipelineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class YandexMatchTest(unittest.TestCase):
+    """Чужой телефон хуже отсутствующего: по нему позвонят и попадут не туда."""
+
+    def test_same_name_matches(self):
+        self.assertTrue(yandex.looks_like_same("Анюта, салон красоты", "Салон красоты Анюта"))
+
+    def test_punctuation_and_case_ignored(self):
+        self.assertTrue(yandex.looks_like_same("Shagane, парикмахерская", "«SHAGANE» — парикмахерская"))
+
+    def test_different_business_rejected(self):
+        self.assertFalse(yandex.looks_like_same("Анюта, салон", "Пятёрочка"))
+
+    def test_empty_never_matches(self):
+        self.assertFalse(yandex.looks_like_same("", "Анюта"))
+        self.assertFalse(yandex.looks_like_same("Анюта", ""))
+
+    def test_short_words_do_not_create_false_match(self):
+        # «и», «на» и прочая мелочь совпала бы у чего угодно
+        self.assertFalse(yandex.looks_like_same("Кафе на углу", "Бар на пирсе"))
+
+    def test_enrich_without_client_sets_search_link(self):
+        company = make(name="Анюта")
+        company.city = "Уфа"
+        yandex.enrich([company], None)
+        self.assertIn("yandex.ru/maps", company.url_yandex)
+        self.assertEqual(company.phone_source, "")
+
+    def test_enrich_fills_phone_from_yandex(self):
+        class FakeClient:
+            pause = 0
+            def find(self, company):
+                return yandex.YandexOrg(org_id="42", name=company.name,
+                                        phone="+7 347 000-00-00", url="https://yandex.ru/maps/org/42/")
+
+        company = make(name="Анюта", phone="")
+        yandex.enrich([company], FakeClient())
+        self.assertEqual(company.phone, "+7 347 000-00-00")
+        self.assertEqual(company.phone_source, "yandex")
+        self.assertEqual(company.yandex_org_id, "42")
+
+    def test_existing_phone_is_not_overwritten(self):
+        class FakeClient:
+            pause = 0
+            def find(self, company):
+                return yandex.YandexOrg(org_id="42", phone="+7 347 111-11-11")
+
+        company = make(name="Анюта", phone="+7 900 000-00-00")
+        company.phone_source = "2gis"
+        yandex.enrich([company], FakeClient())
+        self.assertEqual(company.phone, "+7 900 000-00-00")
+        self.assertEqual(company.phone_source, "2gis")
+
+    def test_not_found_falls_back_to_search_link(self):
+        class FakeClient:
+            pause = 0
+            def find(self, company):
+                return None
+
+        company = make(name="Анюта")
+        yandex.enrich([company], FakeClient())
+        self.assertIn("yandex.ru/maps/?text=", company.url_yandex)
+        self.assertEqual(company.phone_source, "")

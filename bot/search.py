@@ -38,6 +38,7 @@ def _run_search(
     queries: list[str],
     max_pages: int,
     max_results: int,
+    yandex_key: str = "",
 ) -> SearchResult:
     """Синхронная часть — выполняется в отдельном потоке."""
     client = dgis.DgisClient(api_key)
@@ -48,7 +49,9 @@ def _run_search(
         if is_target(c, rating_min=RATING_MIN, rating_max=RATING_MAX, min_reviews=MIN_REVIEWS)
     ]
     selected = scoring.rank(selected)[:max_results]
-    yandex.enrich(selected, None)  # без ключа — ссылки на поиск, этого хватает
+    # С ключом Яндекса подтягиваем телефоны: у 2GIS контакты платные
+    client = yandex.YandexClient(yandex_key) if yandex_key else None
+    yandex.enrich(selected, client)
 
     return SearchResult(
         city=city,
@@ -62,14 +65,15 @@ async def find(
     api_key: str,
     city: str,
     niche: str,
-    max_pages: int = 6,
+    max_pages: int = 5,
     max_results: int = 60,
+    yandex_key: str = "",
 ) -> SearchResult:
     """Ищет лидов, не блокируя бота."""
     queries = presets.resolve(list(presets.PRESETS)) if niche == "__all__" else presets.resolve([niche])
 
     return await asyncio.to_thread(
-        _run_search, api_key, city, queries, max_pages, max_results,
+        _run_search, api_key, city, queries, max_pages, max_results, yandex_key,
     )
 
 

@@ -371,6 +371,7 @@ async def _run_search(
             niche,
             max_pages=config.max_pages,
             max_results=config.max_results,
+            yandex_key=config.yandex_api_key,
         )
     except dgis.DgisError as exc:
         await status.edit_text(f"2GIS ответил ошибкой:\n<code>{exc}</code>")

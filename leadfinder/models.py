@@ -22,6 +22,7 @@ class Company:
     address: str = ""
     city: str = ""
     phone: str = ""
+    phone_source: str = ""   # 2gis | yandex
     website: str = ""
     # 2GIS отдаёт два рейтинга, и они заметно расходятся:
     #   general_* — карточка конкретного филиала, только отзывы 2GIS

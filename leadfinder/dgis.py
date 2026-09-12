@@ -224,6 +224,7 @@ def parse_company(raw: dict[str, Any], city: str = "") -> Company:
         address=raw.get("address_name") or raw.get("full_address_name") or "",
         city=city,
         phone=phone,
+        phone_source="2gis" if phone else "",
         website=website,
         rating=float(rating) if rating is not None else None,
         review_count=int(count or 0),

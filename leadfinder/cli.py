@@ -22,8 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Примеры:\n"
-            "  python -m leadfinder --city Казань --niche медицина авто\n"
-            "  python -m leadfinder --city Пермь --niche барбершоп --rating-max 4.0 --out leads.csv\n"
+            "  python -m leadfinder --city Казань --niche красота авто\n"
+            "  python -m leadfinder --city Уфа --niche красота --yandex --out leads.csv\n"
             "  python -m leadfinder --demo\n\n"
             "Пресеты ниш: " + ", ".join(presets.PRESETS)
         ),
@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--niche",
         nargs="+",
-        default=["медицина"],
+        default=["красота"],
         help="Пресеты ниш или произвольные запросы через пробел",
     )
     parser.add_argument("--rating-min", type=float, default=3.0, help="Нижняя граница рейтинга (по умолчанию 3.0)")
@@ -46,7 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default="leads.csv", help="Куда сохранить CSV")
     parser.add_argument("--json", dest="json_out", help="Дополнительно сохранить JSON")
 
-    parser.add_argument("--yandex", action="store_true", help="Искать точные карточки Яндекса (нужен ключ)")
+    parser.add_argument("--yandex", action="store_true",
+                        help="Подтянуть телефоны и карточки из Яндекса (нужен YANDEX_API_KEY)")
     parser.add_argument("--demo", action="store_true", help="Прогон на встроенном примере, без ключей и сети")
     parser.add_argument("-v", "--verbose", action="store_true", help="Подробный лог")
 
@@ -118,9 +119,14 @@ def run(args: argparse.Namespace) -> int:
         yandex_key = os.environ.get("YANDEX_API_KEY", "")
         if yandex_key:
             yandex_client = yandex.YandexClient(yandex_key)
+            print(f"Спрашиваю телефоны у Яндекса для {len(selected)} компаний…")
         else:
-            print("Ключа Яндекса нет — поставлю ссылки на поиск вместо прямых карточек.")
+            print("Нет YANDEX_API_KEY — телефонов не будет, поставлю ссылки на поиск.")
     yandex.enrich(selected, yandex_client)
+    if yandex_client is not None:
+        got = sum(1 for c in selected if c.phone_source == "yandex")
+        print(f"Телефонов найдено: {got} из {len(selected)}"
+              f" (запросов к Яндексу: {yandex_client.requests_made})")
 
     # --------------------------------------------------------------- вывод
     print()
