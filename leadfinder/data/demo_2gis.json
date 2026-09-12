@@ -1,0 +1,113 @@
+[
+  {
+    "id": "70000001018452301_a1",
+    "name": "Стоматология «Дента-Плюс»",
+    "address_name": "ул. Лесная, 14",
+    "point": {"lat": 55.796, "lon": 49.106},
+    "reviews": {"general_rating": 3.4, "general_review_count": 48},
+    "rubrics": [{"id": "161", "name": "Стоматологическая клиника"}],
+    "contact_groups": [
+      {"contacts": [
+        {"type": "phone", "value": "+7 900 000-11-22"},
+        {"type": "website", "url": "https://denta-plus.example"}
+      ]}
+    ]
+  },
+  {
+    "id": "70000001018452302_a2",
+    "name": "Автосервис «Мотор»",
+    "address_name": "пр. Заводской, 3с1",
+    "point": {"lat": 55.771, "lon": 49.142},
+    "reviews": {"general_rating": 3.8, "general_review_count": 214},
+    "rubrics": [{"id": "205", "name": "Автосервис"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 000-33-44"}]}
+    ]
+  },
+  {
+    "id": "70000001018452303_a3",
+    "name": "Барбершоп «Топор»",
+    "address_name": "ул. Баумана, 51",
+    "point": {"lat": 55.788, "lon": 49.121},
+    "reviews": {"general_rating": 4.1, "general_review_count": 96},
+    "rubrics": [{"id": "310", "name": "Барбершоп"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 000-55-66"}]}
+    ]
+  },
+  {
+    "id": "70000001018452304_a4",
+    "name": "Медцентр «Здоровье-24»",
+    "address_name": "ул. Победы, 108",
+    "point": {"lat": 55.812, "lon": 49.199},
+    "reviews": {"general_rating": 3.1, "general_review_count": 27},
+    "rubrics": [{"id": "162", "name": "Медцентр, клиника"}],
+    "contact_groups": []
+  },
+  {
+    "id": "70000001018452305_a5",
+    "name": "Шиномонтаж на Кольцевой",
+    "address_name": "Кольцевая ул., 7",
+    "point": {"lat": 55.744, "lon": 49.081},
+    "reviews": {"general_rating": 4.15, "general_review_count": 11},
+    "rubrics": [{"id": "207", "name": "Шиномонтаж"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 000-77-88"}]}
+    ]
+  },
+  {
+    "id": "70000001018452306_a6",
+    "name": "Салон красоты «Аура»",
+    "address_name": "ул. Тихая, 2",
+    "point": {"lat": 55.802, "lon": 49.155},
+    "reviews": {"general_rating": 4.8, "general_review_count": 340},
+    "rubrics": [{"id": "311", "name": "Салон красоты"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 000-99-00"}]}
+    ]
+  },
+  {
+    "id": "70000001018452307_a7",
+    "name": "Кофейня «Термос»",
+    "address_name": "ул. Университетская, 9",
+    "point": {"lat": 55.790, "lon": 49.118},
+    "reviews": {"general_rating": 2.6, "general_review_count": 73},
+    "rubrics": [{"id": "402", "name": "Кофейня"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 111-22-33"}]}
+    ]
+  },
+  {
+    "id": "70000001018452308_a8",
+    "name": "Детский центр «Радуга»",
+    "address_name": "б-р Строителей, 41",
+    "point": {"lat": 55.763, "lon": 49.207},
+    "reviews": {"general_rating": 3.9, "general_review_count": 6},
+    "rubrics": [{"id": "512", "name": "Детский центр развития"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 222-33-44"}]}
+    ]
+  },
+  {
+    "id": "70000001018452309_a9",
+    "name": "Фитнес-клуб «Атлант»",
+    "address_name": "ул. Спортивная, 18",
+    "point": {"lat": 55.755, "lon": 49.133},
+    "reviews": {"general_rating": 3.6, "general_review_count": 156},
+    "rubrics": [{"id": "601", "name": "Фитнес-клуб"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 333-44-55"}]}
+    ]
+  },
+  {
+    "id": "70000001018452310_a10",
+    "name": "Ветклиника «Друг»",
+    "address_name": "ул. Садовая, 62",
+    "point": {"lat": 55.821, "lon": 49.092},
+    "reviews": {"general_rating": 4.0},
+    "rubrics": [{"id": "163", "name": "Ветеринарная клиника"}],
+    "contact_groups": [
+      {"contacts": [{"type": "phone", "value": "+7 900 444-55-66"}]}
+    ]
+  }
+]
