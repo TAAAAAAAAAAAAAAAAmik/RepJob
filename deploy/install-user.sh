@@ -38,47 +38,67 @@ curl -fsSL "$TARBALL" | tar -xz -C "$APP_DIR" --strip-components=1
 
 PY=""
 REQ="$APP_DIR/requirements.txt"
+LOG="$APP_DIR/install.log"
 
-# На свежих системах действует PEP 668: установка в домашний каталог
-# требует явного флага. Он трогает только ~/.local, систему не ломает.
-pip_user() {
-    python3 -m pip install --quiet --user "$@" 2>/dev/null \
-    || python3 -m pip install --quiet --user --break-system-packages "$@"
+# Каждый шаг пишется в лог целиком: когда цепочка обрывается, причина
+# должна остаться на диске, а не пропасть в /dev/null.
+: > "$LOG"
+{
+    echo "=== $(date) ==="
+    echo "python: $(python3 -V 2>&1)  путь: $(command -v python3)"
+    echo "система: $(uname -sm)"
+} >> "$LOG"
+
+log_run() {
+    echo "--- \$ $*" >> "$LOG"
+    "$@" >> "$LOG" 2>&1
 }
 
 have_pip() { python3 -m pip --version >/dev/null 2>&1; }
 
+# На свежих системах действует PEP 668: установка в домашний каталог
+# требует явного флага. Он трогает только ~/.local, систему не ломает.
+pip_user() {
+    log_run python3 -m pip install --user "$@" \
+    || log_run python3 -m pip install --user --break-system-packages "$@"
+}
+
 setup_python() {
     # 1. Штатный venv — лучший вариант, изолирован и ничего не трогает
-    if python3 -m venv "$APP_DIR/.venv" >/dev/null 2>&1 \
+    if log_run python3 -m venv "$APP_DIR/.venv" \
        && "$APP_DIR/.venv/bin/python" -m pip --version >/dev/null 2>&1; then
         say "Собираю виртуальное окружение"
         PY="$APP_DIR/.venv/bin/python"
-        "$PY" -m pip install --quiet --upgrade pip >/dev/null 2>&1 || true
-        "$PY" -m pip install --quiet -r "$REQ" && return 0
+        log_run "$PY" -m pip install --upgrade pip || true
+        log_run "$PY" -m pip install -r "$REQ" && return 0
     fi
     rm -rf "$APP_DIR/.venv"
 
     # 2. venv нет — сначала добываем pip
     if ! have_pip; then
         say "Ни venv, ни pip в системе нет — поднимаю pip в домашний каталог"
-        python3 -m ensurepip --upgrade --user >/dev/null 2>&1 || true
+        log_run python3 -m ensurepip --upgrade --user || true
 
         if ! have_pip; then
             say "Скачиваю установщик pip"
-            curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$APP_DIR/.get-pip.py" \
-                && python3 "$APP_DIR/.get-pip.py" --user --quiet >/dev/null 2>&1 || true
+            if log_run curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$APP_DIR/.get-pip.py"; then
+                # Без --break-system-packages get-pip упирается в PEP 668
+                log_run python3 "$APP_DIR/.get-pip.py" --user \
+                || log_run python3 "$APP_DIR/.get-pip.py" --user --break-system-packages \
+                || true
+            fi
             rm -f "$APP_DIR/.get-pip.py"
         fi
     fi
 
     have_pip || return 1
+    say "pip поднят: $(python3 -m pip --version 2>&1 | head -1)"
 
     # 3. С pip на руках собираем изолированное окружение через virtualenv:
     #    он не требует системного модуля venv и обходит запрет PEP 668
-    if pip_user virtualenv >/dev/null 2>&1 \
-       && python3 -m virtualenv "$APP_DIR/.venv" >/dev/null 2>&1 \
-       && "$APP_DIR/.venv/bin/python" -m pip install --quiet -r "$REQ"; then
+    if pip_user virtualenv \
+       && log_run python3 -m virtualenv "$APP_DIR/.venv" \
+       && log_run "$APP_DIR/.venv/bin/python" -m pip install -r "$REQ"; then
         say "Собрал окружение через virtualenv"
         PY="$APP_DIR/.venv/bin/python"
         return 0
@@ -92,10 +112,12 @@ setup_python() {
     return 0
 }
 
-setup_python || die "Не удалось поставить зависимости.
-   Покажи вывод этих двух команд:
-     python3 -m ensurepip --upgrade --user
-     python3 -m pip install --user -r $REQ"
+if ! setup_python; then
+    printf '\n\033[1;31mНе удалось поставить зависимости.\033[0m Последнее из лога:\n\n'
+    tail -30 "$LOG"
+    printf '\nПолный лог: %s\n' "$LOG"
+    exit 1
+fi
 
 # ------------------------------------------------------------------ ключи
 
