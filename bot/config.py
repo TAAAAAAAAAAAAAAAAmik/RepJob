@@ -18,7 +18,7 @@ class Config:
     proxy: str = ""
 
     # Ограничители, чтобы один человек не выел всю квоту 2GIS
-    max_pages: int = 6
+    max_pages: int = 5
     max_results: int = 60
 
     @property
@@ -59,6 +59,6 @@ def load() -> Config:
         yandex_api_key=os.environ.get("YANDEX_API_KEY", "").strip(),
         allowed_ids=_parse_ids(os.environ.get("BOT_ALLOWED_IDS", "")),
         proxy=os.environ.get("BOT_PROXY", "").strip(),
-        max_pages=int(os.environ.get("BOT_MAX_PAGES", "6")),
+        max_pages=min(int(os.environ.get("BOT_MAX_PAGES", "5")), 5),
         max_results=int(os.environ.get("BOT_MAX_RESULTS", "60")),
     )

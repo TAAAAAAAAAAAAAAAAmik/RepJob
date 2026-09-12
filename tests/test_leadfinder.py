@@ -139,14 +139,55 @@ class ParsingTest(unittest.TestCase):
 
 class PresetsTest(unittest.TestCase):
     def test_expands_known_preset(self):
-        self.assertIn("стоматология", presets.resolve(["медицина"]))
+        self.assertIn("барбершоп", presets.resolve(["красота"]))
 
     def test_passes_through_free_text(self):
         self.assertEqual(presets.resolve(["ремонт обуви"]), ["ремонт обуви"])
 
     def test_deduplicates_across_presets(self):
-        queries = presets.resolve(["медицина", "медицина", "стоматология"])
+        queries = presets.resolve(["красота", "красота", "барбершоп"])
         self.assertEqual(len(queries), len(set(q.casefold() for q in queries)))
+
+
+class ApiLimitsTest(unittest.TestCase):
+    """Оба предела 2GIS жёсткие: превышение — ошибка 400 и падение поиска
+    целиком, а не просто укороченная выдача."""
+
+    def test_page_size_within_limit(self):
+        self.assertLessEqual(dgis.PAGE_SIZE, 10)
+
+    def test_default_pages_within_limit(self):
+        self.assertLessEqual(dgis.MAX_PAGES, dgis.PAGE_LIMIT)
+
+    def test_search_clamps_excessive_pages(self):
+        pages = []
+
+        class Fake(dgis.DgisClient):
+            def __init__(self):
+                pass
+            def _get(self, url, params):
+                pages.append(params["page"])
+                return {"result": {"items": [{"id": str(params["page"])}], "total": 10_000}}
+
+        client = Fake()
+        client.pause = 0
+        list(client.search("тест", "1", max_pages=99))
+        self.assertEqual(pages, list(range(1, dgis.PAGE_LIMIT + 1)))
+
+    def test_search_floors_at_one_page(self):
+        pages = []
+
+        class Fake(dgis.DgisClient):
+            def __init__(self):
+                pass
+            def _get(self, url, params):
+                pages.append(params["page"])
+                return {"result": {"items": [], "total": 0}}
+
+        client = Fake()
+        client.pause = 0
+        list(client.search("тест", "1", max_pages=0))
+        self.assertEqual(pages, [1])
 
 
 class DemoPipelineTest(unittest.TestCase):

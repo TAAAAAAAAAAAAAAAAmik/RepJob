@@ -20,7 +20,6 @@ LAST = "📄 Последняя выдача"
 HELP = "❓ Помощь"
 
 NICHE_TITLES = {
-    "медицина": "🩺 Медицина",
     "красота": "💇 Красота",
     "авто": "🔧 Авто",
     "спорт": "🏋 Спорт",
@@ -66,7 +65,7 @@ def niches(city_known: bool = True) -> InlineKeyboardMarkup:
     builder.button(text="🌐 Все ниши сразу", callback_data="niche:__all__")
     if city_known:
         builder.button(text="↩️ Сменить город", callback_data="back:city")
-    builder.adjust(2, 2, 2, 1, 1, 1)
+    builder.adjust(2, 2, 2, 1, 1)
     return builder.as_markup()
 
 
