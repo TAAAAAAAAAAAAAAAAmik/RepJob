@@ -70,7 +70,11 @@ async def find(
     yandex_key: str = "",
 ) -> SearchResult:
     """Ищет лидов, не блокируя бота."""
-    queries = presets.resolve(list(presets.PRESETS)) if niche == "__all__" else presets.resolve([niche])
+    if niche == "__all__":
+        queries = presets.resolve(list(presets.PRESETS))
+    else:
+        # Своя формулировка может прийти списком через запятую
+        queries = presets.resolve([part for part in niche.split(",") if part.strip()])
 
     return await asyncio.to_thread(
         _run_search, api_key, city, queries, max_pages, max_results, yandex_key,

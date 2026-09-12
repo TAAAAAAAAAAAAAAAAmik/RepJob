@@ -62,10 +62,11 @@ def niches(city_known: bool = True) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for key in PRESETS:
         builder.button(text=NICHE_TITLES.get(key, key), callback_data=f"niche:{key}")
+    builder.button(text="✏️ Своя ниша", callback_data="niche:__custom__")
     builder.button(text="🌐 Все ниши сразу", callback_data="niche:__all__")
     if city_known:
         builder.button(text="↩️ Сменить город", callback_data="back:city")
-    builder.adjust(2, 2, 2, 1, 1)
+    builder.adjust(2, 2, 2, 1, 1, 1)
     return builder.as_markup()
 
 

@@ -130,6 +130,7 @@ class Flow(StatesGroup):
     calc = State()      # ждём «рейтинг отзывов»
     target = State()    # ждём выбор цели кнопкой
     grant = State()     # ждём ID или пересланное сообщение
+    custom = State()    # ждём свою формулировку ниши
 
 
 # ------------------------------------------------------------------- вход
@@ -244,6 +245,17 @@ async def picked_niche(
         return
 
     niche = callback.data.split(":", 1)[1]
+
+    if niche == "__custom__":
+        await state.set_state(Flow.custom)
+        await callback.message.edit_text(
+            f"Город: <b>{escape(city)}</b>\n\n"
+            "Напиши, что искать. Одним словом или фразой, как искал бы в 2GIS:\n"
+            "<code>стоматология</code>, <code>ремонт обуви</code>, <code>вет клиника</code>\n\n"
+            "Можно несколько через запятую — тогда будет шире, но и запросов уйдёт больше."
+        )
+        return
+
     await state.clear()
     storage.remember_city(callback.from_user.id, city)
 
@@ -251,6 +263,27 @@ async def picked_niche(
         await callback.message.edit_reply_markup(reply_markup=None)
 
     await _run_search(callback.message, config, city, niche, user_id=callback.from_user.id)
+
+
+@router.message(Flow.custom, F.text, NOT_MENU)
+async def typed_niche(
+    message: Message, state: FSMContext, config: Config, storage: Storage,
+) -> None:
+    query = (message.text or "").strip()
+    if not query or query.startswith("/"):
+        await message.answer("Напиши, что искать. Например: <code>стоматология</code>")
+        return
+
+    data = await state.get_data()
+    city = data.get("city")
+    if not city:
+        await state.clear()
+        await message.answer("Потерял город. Нажми «Найти клиентов» заново.")
+        return
+
+    await state.clear()
+    storage.remember_city(message.from_user.id, city)
+    await _run_search(message, config, city, query, user_id=message.from_user.id)
 
 
 @router.callback_query(F.data == "result:again")

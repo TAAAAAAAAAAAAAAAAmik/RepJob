@@ -71,6 +71,37 @@ else
     say "Файл .env уже есть, не трогаю"
 fi
 
+# Шаблон пополняется, а .env на сервере остаётся старым: без переноса
+# новая настройка молча отсутствует, и правка её через sed ничего не даёт —
+# заменять нечего.
+merge_env() {
+    local example="$APP_DIR/.env.example"
+    local target="$APP_DIR/.env"
+    local added=0
+    local line key
+
+    [ -f "$example" ] && [ -f "$target" ] || return 0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ""|\#*) continue ;;
+            *=*) key="${line%%=*}" ;;
+            *) continue ;;
+        esac
+        if ! grep -qE "^[[:space:]]*${key}=" "$target"; then
+            printf '%s\n' "$line" >> "$target"
+            added=$((added + 1))
+        fi
+    done < "$example"
+
+    if [ "$added" -gt 0 ]; then
+        say "Перенёс в .env новых настроек: $added"
+    fi
+    return 0
+}
+
+merge_env
+
 chown -R "$SERVICE_USER:$SERVICE_USER" "$APP_DIR"
 chmod 600 "$APP_DIR/.env"
 
