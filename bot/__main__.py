@@ -14,10 +14,12 @@ from aiogram.types import BotCommand
 
 from . import config as config_module
 from .handlers import AccessMiddleware, router
+from .storage import Storage
 
 
 async def set_commands(bot: Bot) -> None:
     await bot.set_my_commands([
+        BotCommand(command="start", description="Меню"),
         BotCommand(command="find", description="Подобрать компании в городе"),
         BotCommand(command="calc", description="Сколько пятёрок нужно до цели"),
         BotCommand(command="csv", description="Последняя выдача файлом"),
@@ -65,7 +67,7 @@ async def run() -> None:
 
     # Пропускаем накопившиеся за простой апдейты, чтобы бот не разгребал очередь
     await bot.delete_webhook(drop_pending_updates=True)
-    await dispatcher.start_polling(bot, config=cfg)
+    await dispatcher.start_polling(bot, config=cfg, storage=Storage())
 
 
 def main() -> None:

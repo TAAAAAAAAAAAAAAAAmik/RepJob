@@ -1,4 +1,4 @@
-"""Хендлеры бота."""
+"""Хендлеры бота. Всё управление кнопками, команды оставлены как ярлыки."""
 
 from __future__ import annotations
 
@@ -14,11 +14,17 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message, TelegramObj
 from leadfinder import dgis
 from leadfinder.models import reviews_needed_for
 
-from . import formatting, keyboards, search
+from . import formatting, keyboards as kb, search
 from .config import Config
+from .storage import Storage
 
 log = logging.getLogger(__name__)
 router = Router()
+
+# Нажатия меню не должны утекать в поля ввода мастеров: без этого
+# тап по «Калькулятору» посреди ввода города примется за название города.
+MENU_LABELS = frozenset({kb.FIND, kb.CALC, kb.LAST, kb.HELP})
+NOT_MENU = ~F.text.in_(MENU_LABELS)
 
 # Телеграм режет сообщения на 4096 символах — держимся ниже с запасом
 MESSAGE_LIMIT = 3900
@@ -28,18 +34,18 @@ _last_results: dict[int, search.SearchResult] = {}
 
 HELP = """<b>Поиск клиентов на работу с репутацией</b>
 
-/find — подобрать компании в городе
-/calc — сколько пятёрок нужно до цели
-/csv — прислать последнюю выдачу файлом
-/id — узнать свой Telegram ID
+<b>{find}</b> — подобрать компании: город, потом ниша кнопками.
+Города запоминаются, повторный поиск в два тапа.
 
-<b>Быстрый вызов:</b>
-<code>/find Казань медицина</code>
-<code>/calc 3.4 48</code> — до 4.5
-<code>/calc 3.4 48 4.3</code> — до своей цели
+<b>{calc}</b> — сколько пятёрок нужно до цели и за сколько месяцев.
+Самое полезное на встрече: считает при клиенте за пару секунд.
+
+<b>{last}</b> — прислать последнюю выдачу файлом ещё раз.
 
 Отбираются компании с рейтингом {rmin}–{rmax} и минимум {reviews} отзывами: \
-ниже — обычно реально плохой сервис, выше — у владельца не болит."""
+ниже — обычно реально плохой сервис, выше — у владельца не болит.
+
+Есть и команды, если так быстрее: /find, /calc, /csv, /id"""
 
 
 class AccessMiddleware(BaseMiddleware):
@@ -86,117 +92,123 @@ class AccessMiddleware(BaseMiddleware):
             await event.answer(text.split("\n")[0], show_alert=True)
 
 
-class Search(StatesGroup):
-    city = State()
-    niche = State()
+class Flow(StatesGroup):
+    city = State()      # ждём название города текстом
+    calc = State()      # ждём «рейтинг отзывов»
+    target = State()    # ждём выбор цели кнопкой
 
 
-# ------------------------------------------------------------------ команды
+# ------------------------------------------------------------------- вход
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     await message.answer(
-        "Готов искать клиентов.\n\n" + _help_text(),
-        disable_web_page_preview=True,
+        "Готов искать клиентов. Пользуйся кнопками снизу.",
+        reply_markup=kb.main_menu(),
     )
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    await message.answer(_help_text(), disable_web_page_preview=True)
+@router.message(F.text == kb.HELP)
+async def show_help(message: Message) -> None:
+    await message.answer(_help_text(), reply_markup=kb.main_menu())
 
 
 @router.message(Command("id"))
 async def cmd_id(message: Message) -> None:
-    user = message.from_user
-    await message.answer(f"Твой Telegram ID: <code>{user.id}</code>")
+    await message.answer(f"Твой Telegram ID: <code>{message.from_user.id}</code>")
 
 
-@router.message(Command("calc"))
-async def cmd_calc(message: Message) -> None:
-    parts = (message.text or "").split()[1:]
-
-    if len(parts) < 2:
-        await message.answer(
-            "Как пользоваться:\n"
-            "<code>/calc 3.4 48</code> — рейтинг, отзывов, цель 4.5\n"
-            "<code>/calc 3.4 48 4.3</code> — со своей целью"
-        )
-        return
-
-    try:
-        rating = float(parts[0].replace(",", "."))
-        count = int(parts[1])
-        target = float(parts[2].replace(",", ".")) if len(parts) > 2 else 4.5
-    except ValueError:
-        await message.answer("Не понял числа. Пример: <code>/calc 3.4 48</code>")
-        return
-
-    if not (1 <= rating <= 5) or not (1 <= target <= 5) or count < 1:
-        await message.answer("Рейтинг от 1 до 5, отзывов — хотя бы один.")
-        return
-
-    needed = reviews_needed_for(rating, count, target)
-    await message.answer(formatting.calc_message(rating, count, target, needed))
-
-
-@router.message(Command("csv"))
-async def cmd_csv(message: Message) -> None:
-    result = _last_results.get(message.from_user.id)
-    if result is None or not result.companies:
-        await message.answer("Ещё нечего выгружать — сначала /find")
-        return
-
-    await _send_csv(message, result)
+# ------------------------------------------------------------------ поиск
 
 
 @router.message(Command("find"))
-async def cmd_find(message: Message, state: FSMContext, config: Config) -> None:
-    parts = (message.text or "").split()[1:]
+@router.message(F.text == kb.FIND)
+async def start_find(message: Message, state: FSMContext, storage: Storage) -> None:
+    await state.clear()
+    await _ask_city(message, state, storage, message.from_user.id)
 
-    # /find Казань медицина — сразу, без мастера
-    if len(parts) >= 2:
-        city, niche = parts[0], parts[1].casefold()
-        await state.clear()
-        await _run_search(message, config, city, niche)
+
+async def _ask_city(
+    message: Message, state: FSMContext, storage: Storage, user_id: int,
+) -> None:
+    recent = storage.recent_cities(user_id)
+
+    if recent:
+        await message.answer("В каком городе ищем?", reply_markup=kb.cities(recent))
         return
 
-    if len(parts) == 1:
-        await state.update_data(city=parts[0])
-        await state.set_state(Search.niche)
-        await message.answer(f"Город: <b>{parts[0]}</b>\nТеперь ниша:", reply_markup=keyboards.niches())
+    await state.set_state(Flow.city)
+    await message.answer("В каком городе ищем? Напиши название.", reply_markup=kb.cancel())
+
+
+@router.callback_query(F.data.startswith("city:"))
+async def picked_city(
+    callback: CallbackQuery, state: FSMContext, storage: Storage,
+) -> None:
+    await callback.answer()
+    choice = callback.data.split(":", 1)[1]
+
+    if choice == "new":
+        await state.set_state(Flow.city)
+        await callback.message.edit_text("Напиши название города.")
         return
 
-    await state.set_state(Search.city)
-    await message.answer("В каком городе ищем?", reply_markup=keyboards.cancel())
+    recent = storage.recent_cities(callback.from_user.id)
+    try:
+        city = recent[int(choice)]
+    except (ValueError, IndexError):
+        await callback.message.edit_text("Список городов обновился. Нажми «Найти клиентов» заново.")
+        return
+
+    await state.update_data(city=city)
+    await callback.message.edit_text(
+        f"Город: <b>{city}</b>\nТеперь ниша:", reply_markup=kb.niches(),
+    )
 
 
-@router.message(Search.city, F.text)
-async def got_city(message: Message, state: FSMContext) -> None:
+@router.message(Flow.city, F.text, NOT_MENU)
+async def typed_city(message: Message, state: FSMContext) -> None:
     city = (message.text or "").strip()
     if not city or city.startswith("/"):
         await message.answer("Напиши название города, например: Казань")
         return
 
     await state.update_data(city=city)
-    await state.set_state(Search.niche)
-    await message.answer(f"Город: <b>{city}</b>\nТеперь ниша:", reply_markup=keyboards.niches())
+    await message.answer(f"Город: <b>{city}</b>\nТеперь ниша:", reply_markup=kb.niches())
+
+
+@router.callback_query(F.data == "back:city")
+async def back_to_city(callback: CallbackQuery, state: FSMContext, storage: Storage) -> None:
+    await callback.answer()
+    await state.clear()
+
+    recent = storage.recent_cities(callback.from_user.id)
+    if recent:
+        await callback.message.edit_text("В каком городе ищем?", reply_markup=kb.cities(recent))
+    else:
+        await state.set_state(Flow.city)
+        await callback.message.edit_text("Напиши название города.")
 
 
 @router.callback_query(F.data.startswith("niche:"))
-async def got_niche(callback: CallbackQuery, state: FSMContext, config: Config) -> None:
+async def picked_niche(
+    callback: CallbackQuery, state: FSMContext, config: Config, storage: Storage,
+) -> None:
     await callback.answer()
 
     data = await state.get_data()
     city = data.get("city")
     if not city:
-        await callback.message.answer("Потерял город. Начни заново: /find")
+        await callback.message.answer("Потерял город. Нажми «Найти клиентов» заново.")
         await state.clear()
         return
 
     niche = callback.data.split(":", 1)[1]
     await state.clear()
+    storage.remember_city(callback.from_user.id, city)
 
     if callback.message.reply_markup:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -204,11 +216,139 @@ async def got_niche(callback: CallbackQuery, state: FSMContext, config: Config) 
     await _run_search(callback.message, config, city, niche, user_id=callback.from_user.id)
 
 
+@router.callback_query(F.data == "result:again")
+async def search_again(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+
+    result = _last_results.get(callback.from_user.id)
+    if result is None:
+        await callback.message.answer("Сначала найди клиентов.")
+        return
+
+    await state.update_data(city=result.city)
+    await callback.message.answer(
+        f"Город: <b>{result.city}</b>\nВыбери нишу:", reply_markup=kb.niches(),
+    )
+
+
+# ------------------------------------------------------------- калькулятор
+
+
+@router.message(Command("calc"))
+@router.message(F.text == kb.CALC)
+async def start_calc(message: Message, state: FSMContext) -> None:
+    parts = (message.text or "").split()[1:]
+
+    # /calc 3.4 48 — минуя мастер
+    if len(parts) >= 2:
+        parsed = _parse_calc(parts)
+        if parsed is None:
+            await message.answer("Не понял числа. Пример: <code>/calc 3.4 48</code>")
+            return
+        rating, count, target = parsed
+        await _send_calc(message, rating, count, target)
+        return
+
+    await state.set_state(Flow.calc)
+    await message.answer(
+        "Напиши текущий рейтинг и число отзывов через пробел.\n"
+        "Например: <code>3.4 48</code>",
+        reply_markup=kb.cancel(),
+    )
+
+
+@router.message(Flow.calc, F.text, NOT_MENU)
+async def got_calc_input(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    parsed = _parse_calc(text.replace(",", ".").split())
+    if parsed is None:
+        await message.answer(
+            "Нужны два числа через пробел: рейтинг и сколько отзывов.\n"
+            "Например: <code>3.4 48</code>"
+        )
+        return
+
+    rating, count, _ = parsed
+    await state.update_data(rating=rating, count=count)
+    await state.set_state(Flow.target)
+    await message.answer(
+        f"<b>{rating}</b> при {count} отзывах. До какой оценки ведём?",
+        reply_markup=kb.calc_targets(),
+    )
+
+
+@router.callback_query(F.data.startswith("target:"))
+async def picked_target(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+
+    data = await state.get_data()
+    rating, count = data.get("rating"), data.get("count")
+    if rating is None or count is None:
+        await callback.message.answer("Данные потерялись. Нажми «Калькулятор» заново.")
+        await state.clear()
+        return
+
+    target = float(callback.data.split(":", 1)[1])
+    await state.clear()
+
+    if callback.message.reply_markup:
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+    await _send_calc(callback.message, rating, count, target)
+
+
+def _parse_calc(parts: list[str]) -> tuple[float, int, float] | None:
+    """Разбирает «3.4 48» или «3,4 48 4.3». Возвращает None, если не вышло."""
+    if len(parts) < 2:
+        return None
+    try:
+        rating = float(parts[0].replace(",", "."))
+        count = int(parts[1])
+        target = float(parts[2].replace(",", ".")) if len(parts) > 2 else 4.5
+    except ValueError:
+        return None
+
+    if not (1 <= rating <= 5) or not (1 <= target <= 5) or count < 1:
+        return None
+    return rating, count, target
+
+
+async def _send_calc(message: Message, rating: float, count: int, target: float) -> None:
+    needed = reviews_needed_for(rating, count, target)
+    await message.answer(
+        formatting.calc_message(rating, count, target, needed),
+        reply_markup=kb.main_menu(),
+    )
+
+
+# ------------------------------------------------------------------ выгрузка
+
+
+@router.message(Command("csv"))
+@router.message(F.text == kb.LAST)
+async def send_last(message: Message) -> None:
+    result = _last_results.get(message.from_user.id)
+    if result is None or not result.companies:
+        await message.answer("Ещё нечего выгружать — сначала найди клиентов.")
+        return
+    await _send_csv(message, result)
+
+
+@router.callback_query(F.data == "result:csv")
+async def resend_csv(callback: CallbackQuery) -> None:
+    await callback.answer()
+    result = _last_results.get(callback.from_user.id)
+    if result is None or not result.companies:
+        await callback.message.answer("Ещё нечего выгружать.")
+        return
+    await _send_csv(callback.message, result)
+
+
 @router.callback_query(F.data == "cancel")
 async def cancelled(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer("Отменил")
-    await callback.message.edit_text("Отменил. Начать заново: /find")
+    await callback.message.edit_text("Отменил.")
 
 
 # -------------------------------------------------------------------- поиск
@@ -221,7 +361,7 @@ async def _run_search(
     niche: str,
     user_id: int | None = None,
 ) -> None:
-    user_id = user_id or message.from_user.id
+    user_id = user_id or message.chat.id
     status = await message.answer(f"Ищу в городе <b>{city}</b>… это займёт до минуты.")
 
     try:
@@ -242,8 +382,11 @@ async def _run_search(
 
     _last_results[user_id] = result
 
-    text = _fit(result)
-    await status.edit_text(text, disable_web_page_preview=True)
+    await status.edit_text(
+        _fit(result),
+        disable_web_page_preview=True,
+        reply_markup=kb.results() if result.companies else None,
+    )
 
     if result.companies:
         await _send_csv(message, result)
@@ -271,6 +414,7 @@ async def _send_csv(message: Message, result: search.SearchResult) -> None:
 
 def _help_text() -> str:
     return HELP.format(
+        find=kb.FIND, calc=kb.CALC, last=kb.LAST,
         rmin=search.RATING_MIN,
         rmax=search.RATING_MAX,
         reviews=search.MIN_REVIEWS,

@@ -137,6 +137,43 @@ class WiringTest(unittest.TestCase):
             self.assertIn(f"niche:{key}", payloads)
         self.assertIn("niche:__all__", payloads)
 
+    def test_every_button_has_a_handler(self):
+        """Кнопка без обработчика молча ничего не делает — поймать это можно
+        только так: прогнать все возможные callback_data через фильтры."""
+        import asyncio
+        import types
+
+        payloads = set()
+        for markup in (
+            keyboards.niches(), keyboards.niches(city_known=False),
+            keyboards.calc_targets(), keyboards.results(), keyboards.cancel(),
+            keyboards.cities(["Казань", "Пермь"]),
+        ):
+            for row in markup.inline_keyboard:
+                for button in row:
+                    payloads.add(button.callback_data)
+
+        async def handler_for(payload):
+            fake = types.SimpleNamespace(data=payload)
+            for handler in router.callback_query.handlers:
+                for flt in handler.filters or []:
+                    try:
+                        result = flt.callback(fake)
+                        if asyncio.iscoroutine(result):
+                            result = await result
+                        if result:
+                            return handler.callback.__name__
+                    except Exception:
+                        continue
+            return None
+
+        async def check():
+            return {p: await handler_for(p) for p in sorted(payloads)}
+
+        found = asyncio.run(check())
+        orphans = [p for p, name in found.items() if name is None]
+        self.assertEqual(orphans, [], f"кнопки без обработчика: {orphans}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
