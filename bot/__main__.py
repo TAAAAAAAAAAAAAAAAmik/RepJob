@@ -7,6 +7,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
@@ -40,7 +41,15 @@ async def run() -> None:
             "Напиши ему /id, добавь свой номер в переменную и перезапусти."
         )
 
-    bot = Bot(cfg.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    session = AiohttpSession(proxy=cfg.proxy) if cfg.proxy else None
+    if cfg.proxy:
+        log.info("Хожу в Telegram через прокси")
+
+    bot = Bot(
+        cfg.bot_token,
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     dispatcher = Dispatcher(storage=MemoryStorage())
 
     middleware = AccessMiddleware(cfg)

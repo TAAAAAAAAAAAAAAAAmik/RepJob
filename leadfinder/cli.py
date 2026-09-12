@@ -94,6 +94,7 @@ def run(args: argparse.Namespace) -> int:
             return 1
 
         print(f"Найдено всего: {len(companies)}")
+        print(f"Потрачено запросов к 2GIS: {client.requests_made}")
 
     # ------------------------------------------------------------- фильтрация
     selected = [

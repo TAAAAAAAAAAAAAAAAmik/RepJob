@@ -73,6 +73,15 @@ class ScoringTest(unittest.TestCase):
         without = scoring.score_company(make(phone=""))
         self.assertGreater(with_phone.score, without.score)
 
+    def test_no_phone_penalty_when_nobody_has_one(self):
+        # Демо-ключ 2GIS контакты не отдаёт: одинаковый штраф всем просто
+        # перекрашивает горячие лиды в холодные, ничего не ранжируя.
+        nobody = scoring.rank([make(phone=""), make(rating=4.0, phone="")])
+        somebody = scoring.rank([make(phone=""), make(phone="+7 900 000-00-00")])
+
+        self.assertEqual(nobody[0].score, scoring.score_company(make(phone="+7 900 1")).score)
+        self.assertLess(somebody[1].score, somebody[0].score)
+
     def test_score_stays_in_range(self):
         for rating in (3.0, 3.5, 4.0, 4.2):
             for count in (10, 100, 5000):

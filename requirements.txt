@@ -1,2 +1,6 @@
 requests>=2.31
 aiogram>=3.13
+
+# Нужен, только если сервер ходит в Telegram через прокси (BOT_PROXY).
+# На обычном VPS не требуется.
+aiohttp-socks>=0.8

@@ -32,8 +32,8 @@ FIELDS = ",".join([
     "items.rubrics",
 ])
 
-PAGE_SIZE = 50          # максимум, который принимает API
-MAX_PAGES = 20          # 1000 организаций на один запрос — дальше API всё равно обрежет
+PAGE_SIZE = 10          # жёсткий максимум API: больше — ошибка 400
+MAX_PAGES = 10          # 100 организаций на запрос; больше редко нужно, а лимит ключа не резиновый
 REQUEST_PAUSE = 0.35    # пауза между страницами, чтобы не ловить лимиты
 
 
@@ -42,6 +42,12 @@ class DgisError(RuntimeError):
 
 
 class DgisClient:
+    """Клиент с учётом потраченных запросов.
+
+    Демо-ключ даёт всего 1000 запросов на месяц, поэтому счётчик здесь не
+    украшение: по нему видно, во сколько обошёлся прогон.
+    """
+
     def __init__(self, api_key: str, timeout: int = 20, pause: float = REQUEST_PAUSE):
         if not api_key:
             raise ValueError("Нужен ключ 2GIS. Получить: https://dev.2gis.ru")
@@ -49,6 +55,8 @@ class DgisClient:
         self.timeout = timeout
         self.pause = pause
         self.session = requests.Session()
+        self.requests_made = 0
+        self._region_cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------ http
 
@@ -58,6 +66,7 @@ class DgisClient:
 
         for attempt in range(4):
             try:
+                self.requests_made += 1
                 response = self.session.get(url, params=params, timeout=self.timeout)
             except requests.RequestException as exc:
                 last_error = exc
@@ -92,18 +101,27 @@ class DgisClient:
         return payload.get("result", {}).get("items", [])
 
     def resolve_region(self, city: str) -> str:
-        """Ищет region_id по названию города. Бросает DgisError, если не нашёл."""
+        """Ищет region_id по названию города. Бросает DgisError, если не нашёл.
+
+        Результат кэшируется: список регионов меняется раз в год, а запрос
+        к нему стоит столько же, сколько страница выдачи.
+        """
         wanted = city.strip().casefold()
+        if wanted in self._region_cache:
+            return self._region_cache[wanted]
+
         items = self.regions()
 
         for item in items:
             if item.get("name", "").casefold() == wanted:
-                return str(item["id"])
+                self._region_cache[wanted] = str(item["id"])
+                return self._region_cache[wanted]
 
         # Мягкое совпадение: «Санкт-Петербург» против «Санкт-Петербург и ЛО»
         for item in items:
             if wanted in item.get("name", "").casefold():
-                return str(item["id"])
+                self._region_cache[wanted] = str(item["id"])
+                return self._region_cache[wanted]
 
         available = ", ".join(sorted(i.get("name", "") for i in items)[:40])
         raise DgisError(f"Город «{city}» не найден. Доступные: {available} …")
@@ -163,13 +181,15 @@ def parse_company(raw: dict[str, Any], city: str = "") -> Company:
     point = raw.get("point") or {}
     phone, website = _extract_contacts(raw)
 
+    # Филиальный рейтинг — основной; если его нет, берём общий по организации
     rating = reviews.get("general_rating")
-    if rating is None:
-        rating = reviews.get("org_rating")
-
     count = reviews.get("general_review_count")
-    if count is None:
-        count = reviews.get("org_review_count") or 0
+    rating_org = reviews.get("org_rating")
+    count_org = reviews.get("org_review_count") or 0
+
+    if rating is None:
+        rating = rating_org
+        count = count_org
 
     source_id = str(raw.get("id", ""))
 
@@ -184,6 +204,8 @@ def parse_company(raw: dict[str, Any], city: str = "") -> Company:
         website=website,
         rating=float(rating) if rating is not None else None,
         review_count=int(count or 0),
+        rating_org=float(rating_org) if rating_org is not None else None,
+        review_count_org=int(count_org),
         lat=point.get("lat"),
         lon=point.get("lon"),
         url_2gis=f"https://2gis.ru/firm/{source_id.split('_')[0]}" if source_id else "",

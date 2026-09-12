@@ -13,6 +13,10 @@ class Config:
     yandex_api_key: str = ""
     allowed_ids: set[int] = field(default_factory=set)
 
+    # Нужен, только если сервер ходит в интернет через прокси.
+    # Обычному VPS оставить пустым.
+    proxy: str = ""
+
     # Ограничители, чтобы один человек не выел всю квоту 2GIS
     max_pages: int = 6
     max_results: int = 60
@@ -54,6 +58,7 @@ def load() -> Config:
         dgis_api_key=dgis_key,
         yandex_api_key=os.environ.get("YANDEX_API_KEY", "").strip(),
         allowed_ids=_parse_ids(os.environ.get("BOT_ALLOWED_IDS", "")),
+        proxy=os.environ.get("BOT_PROXY", "").strip(),
         max_pages=int(os.environ.get("BOT_MAX_PAGES", "6")),
         max_results=int(os.environ.get("BOT_MAX_RESULTS", "60")),
     )

@@ -23,8 +23,15 @@ class Company:
     city: str = ""
     phone: str = ""
     website: str = ""
+    # 2GIS отдаёт два рейтинга, и они заметно расходятся:
+    #   general_* — карточка конкретного филиала, только отзывы 2GIS
+    #   org_*     — организация целиком, вместе с Flamp
+    # Фильтруем по первому (это то, что видит человек на карточке точки),
+    # но второй кладём рядом — на встрече пригодится оба.
     rating: float | None = None
     review_count: int = 0
+    rating_org: float | None = None
+    review_count_org: int = 0
     lat: float | None = None
     lon: float | None = None
     url_2gis: str = ""

@@ -15,9 +15,11 @@ COLUMNS: list[tuple[str, str]] = [
     ("verdict", "Оценка лида"),
     ("name", "Название"),
     ("rubric", "Рубрика"),
-    ("rating", "Рейтинг 2GIS"),
+    ("rating", "Рейтинг филиала"),
     ("review_count", "Отзывов"),
     ("reviews_needed", "Нужно пятёрок до 4.5"),
+    ("rating_org", "Рейтинг организации"),
+    ("review_count_org", "Отзывов у организации"),
     ("phone", "Телефон"),
     ("address", "Адрес"),
     ("website", "Сайт"),
@@ -67,11 +69,19 @@ def summary(companies: list[Company]) -> str:
     with_phone = sum(1 for c in companies if c.phone)
     avg_rating = sum(c.rating for c in companies if c.rating) / len(companies)
 
-    return (
-        f"Отобрано: {len(companies)}\n"
-        f"  горячих:  {hot}\n"
-        f"  рабочих:  {work}\n"
-        f"  холодных: {cold}\n"
-        f"  с телефоном: {with_phone}\n"
-        f"  средний рейтинг по выборке: {avg_rating:.2f}"
-    )
+    lines = [
+        f"Отобрано: {len(companies)}",
+        f"  горячих:  {hot}",
+        f"  рабочих:  {work}",
+        f"  холодных: {cold}",
+        f"  с телефоном: {with_phone}",
+        f"  средний рейтинг по выборке: {avg_rating:.2f}",
+    ]
+
+    if not with_phone:
+        lines.append(
+            "\nТелефонов нет: демо-ключ 2GIS контакты не отдаёт — это платное поле.\n"
+            "Номер берётся в один клик по ссылке на карточку в последних колонках."
+        )
+
+    return "\n".join(lines)
