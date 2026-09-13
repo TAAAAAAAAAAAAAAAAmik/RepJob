@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -73,12 +74,12 @@ class FormattingTest(unittest.TestCase):
         self.assertNotIn('<b>"Взлом"', line)
 
     def test_results_message_reports_counts(self):
-        text = formatting.results_message(self.leads, "Казань", ["медицина"])
+        text = formatting.page_message(self.leads, "Казань", ["медицина"])
         self.assertIn("Казань", text)
         self.assertIn(f"{len(self.leads)}", text)
 
     def test_empty_result_explains_what_to_do(self):
-        text = formatting.results_message([], "Казань", ["медицина"])
+        text = formatting.page_message([], "Казань", ["медицина"])
         self.assertIn("не попал никто", text)
 
     def test_calc_message_matches_the_formula(self):
@@ -150,7 +151,9 @@ class WiringTest(unittest.TestCase):
             keyboards.niches(), keyboards.niches(city_known=False),
             keyboards.rating_sources(), keyboards.rating_sources(city_known=False),
             keyboards.back_to_sources(),
-            keyboards.calc_targets(), keyboards.results(), keyboards.cancel(),
+            keyboards.calc_targets(), keyboards.cancel(),
+            keyboards.pager(0, 11), keyboards.pager(5, 11), keyboards.pager(10, 11),
+            keyboards.pager(0, 1),
             keyboards.cities(["Казань", "Пермь"]),
             keyboards.admin_panel([(111, {"name": "Гость"})]),
             keyboards.confirm_revoke(111, "Гость"),
@@ -222,11 +225,11 @@ class SourceChoiceTest(unittest.TestCase):
 
     def test_results_message_names_the_platform(self):
         leads = demo_leads()
-        text = formatting.results_message(leads, "Казань", ["еда"], source="2gis_org")
+        text = formatting.page_message(leads, "Казань", ["еда"], source="2gis_org")
         self.assertIn("2ГИС, организация", text)
 
     def test_empty_result_still_names_the_platform(self):
-        text = formatting.results_message([], "Казань", ["еда"], source="2gis_org")
+        text = formatting.page_message([], "Казань", ["еда"], source="2gis_org")
         self.assertIn("2ГИС, организация", text)
 
     def test_source_survives_into_the_message(self):
@@ -238,6 +241,80 @@ class SourceChoiceTest(unittest.TestCase):
         leads = demo_leads()
         result = search.SearchResult("Казань", ["еда"], len(leads), leads)
         self.assertEqual(result.source, sources.DEFAULT)
+
+
+class PagerTest(unittest.TestCase):
+    """Выдача листается кнопками прямо в чате — файл только по запросу."""
+
+    def setUp(self):
+        # 23 лида: не кратно размеру страницы, последняя неполная
+        self.leads = (demo_leads() * 5)[:23]
+        self.pages = formatting.total_pages(len(self.leads))
+
+    def numbers_on(self, page):
+        text = formatting.page_message(self.leads, "Уфа", ["еда"], page=page)
+        return [int(m) for m in re.findall(r"^(\d+)\. ", text, re.M)]
+
+    def test_pages_cover_every_lead_exactly_once(self):
+        seen = [n for page in range(self.pages) for n in self.numbers_on(page)]
+        self.assertEqual(seen, list(range(1, len(self.leads) + 1)))
+
+    def test_numbering_is_global_not_per_page(self):
+        # Иначе на третьей странице снова «1.», и не понять, кого уже обзвонил
+        self.assertEqual(self.numbers_on(1)[0], formatting.PAGE_SIZE + 1)
+
+    def test_last_page_may_be_short(self):
+        self.assertEqual(len(self.numbers_on(self.pages - 1)), 23 % formatting.PAGE_SIZE)
+
+    def test_header_repeats_on_every_page(self):
+        for page in range(self.pages):
+            text = formatting.page_message(self.leads, "Уфа", ["еда"], page=page)
+            self.assertIn("Уфа", text)
+            self.assertIn("Отобрано", text)
+
+    def test_every_page_fits_telegram(self):
+        for page in range(self.pages):
+            text = formatting.page_message(self.leads, "Уфа", ["еда"], page=page)
+            self.assertLessEqual(len(text), formatting.MESSAGE_LIMIT)
+
+    def test_total_pages_math(self):
+        self.assertEqual(formatting.total_pages(0), 1)
+        self.assertEqual(formatting.total_pages(1), 1)
+        self.assertEqual(formatting.total_pages(formatting.PAGE_SIZE), 1)
+        self.assertEqual(formatting.total_pages(formatting.PAGE_SIZE + 1), 2)
+
+    def test_stale_button_cannot_run_off_the_list(self):
+        # Кнопка под старой выдачей живёт вечно: «далее» на 11-й странице
+        # можно нажать и тогда, когда новый поиск вернул три компании.
+        self.assertEqual(formatting.clamp_page(99, len(self.leads)), self.pages - 1)
+        self.assertEqual(formatting.clamp_page(-5, len(self.leads)), 0)
+        self.assertEqual(formatting.clamp_page(3, 0), 0)
+
+    def test_arrows_disappear_at_the_ends(self):
+        first = {b.callback_data for row in keyboards.pager(0, 5).inline_keyboard for b in row}
+        last = {b.callback_data for row in keyboards.pager(4, 5).inline_keyboard for b in row}
+        self.assertNotIn("page:-1", first)
+        self.assertIn("page:1", first)
+        self.assertIn("page:3", last)
+        self.assertNotIn("page:5", last)
+
+    def test_single_page_has_no_pager_row(self):
+        payloads = {b.callback_data for row in keyboards.pager(0, 1).inline_keyboard for b in row}
+        self.assertEqual(payloads, {"result:csv", "result:again"})
+
+    def test_file_stays_available_on_every_page(self):
+        # Таблица неудобна, но иногда нужна — кнопка никуда не девается
+        for page in range(5):
+            payloads = {b.callback_data for row in keyboards.pager(page, 5).inline_keyboard for b in row}
+            self.assertIn("result:csv", payloads)
+
+    def test_plural_agrees_with_the_number(self):
+        cases = {1: "пятёрка", 2: "пятёрки", 5: "пятёрок", 11: "пятёрок",
+                 21: "пятёрка", 106: "пятёрок", 281: "пятёрка", 1002: "пятёрки"}
+        for number, want in cases.items():
+            self.assertEqual(
+                formatting.plural(number, "пятёрка", "пятёрки", "пятёрок"), want, number,
+            )
 
 
 if __name__ == "__main__":

@@ -103,7 +103,7 @@ class CityKeyboardTest(unittest.TestCase):
         self.assertTrue(any("Казань" in t for t in titles))
 
     def test_every_callback_fits_the_limit(self):
-        markups = [kb.niches(), kb.calc_targets(), kb.results(), kb.cancel(),
+        markups = [kb.niches(), kb.calc_targets(), kb.pager(3, 11), kb.cancel(),
                    kb.cities(["Казань", "Пермь", "Уфа"])]
         for markup in markups:
             for row in markup.inline_keyboard:

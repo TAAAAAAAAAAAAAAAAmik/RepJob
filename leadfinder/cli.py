@@ -150,7 +150,7 @@ def run(args: argparse.Namespace) -> int:
 
         print("\nТоп-5 на сегодня:")
         for company in selected[:5]:
-            needed = f"нужно {company.reviews_needed} пятёрок" if company.reviews_needed else "—"
+            needed = f"+{company.reviews_needed} до 4.5" if company.reviews_needed else "—"
             phone = company.phone or "телефона нет"
             print(f"  [{company.score:>3}] {company.rating} · {company.review_count} отз. · {needed}")
             print(f"        {company.name} — {phone}")

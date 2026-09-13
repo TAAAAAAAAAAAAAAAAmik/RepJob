@@ -11,6 +11,7 @@ from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, CallbackQuery, Message, TelegramObject
 
 from leadfinder import dgis, sources
@@ -28,8 +29,7 @@ router = Router()
 MENU_LABELS = frozenset({kb.FIND, kb.CALC, kb.LAST, kb.HELP, kb.ADMIN})
 NOT_MENU = ~F.text.in_(MENU_LABELS)
 
-# Телеграм режет сообщения на 4096 символах — держимся ниже с запасом
-MESSAGE_LIMIT = 3900
+MESSAGE_LIMIT = formatting.MESSAGE_LIMIT
 
 # Последний результат на пользователя, чтобы отдать CSV повторно
 _last_results: dict[int, search.SearchResult] = {}
@@ -44,12 +44,14 @@ HELP = """<b>Поиск клиентов на работу с репутацие
 <b>{calc}</b> — сколько пятёрок нужно до цели и за сколько месяцев.
 Самое полезное на встрече: считает при клиенте за пару секунд.
 
-<b>{last}</b> — прислать последнюю выдачу файлом ещё раз.
+<b>{last}</b> — открыть последнюю выдачу ещё раз.
+
+Список листается кнопкой «Далее» прямо в чате, по пять компаний на экран. Нумерация сквозная, так что видно, до кого дошёл. Таблицей выгружать не обязательно, но кнопка «📄 Всё файлом» под выдачей никуда не делась.
 
 Отбираются компании с рейтингом {rmin}–{rmax} и минимум {reviews} отзывами: \
 ниже — обычно реально плохой сервис, выше — у владельца не болит.
 
-Есть и команды, если так быстрее: /find, /calc, /csv, /id"""
+Есть и команды, если так быстрее: /find, /calc, /csv (выдача файлом), /id"""
 
 
 WELCOME_STRANGER = """Привет! Это внутренний бот — он подбирает компании,
@@ -458,12 +460,45 @@ async def _send_calc(message: Message, rating: float, count: int, target: float)
     await message.answer(formatting.calc_message(rating, count, target, needed))
 
 
-# ------------------------------------------------------------------ выгрузка
+# ------------------------------------------------------------------ выдача
+
+
+@router.callback_query(F.data.startswith("page:"))
+async def turn_page(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+    raw = callback.data.split(":", 1)[1]
+    if raw == "noop":     # счётчик страниц, не кнопка
+        return
+
+    result = _last_results.get(callback.from_user.id)
+    if result is None or not result.companies:
+        # Выдача живёт в памяти процесса: после перезапуска её нет
+        await callback.message.edit_text(
+            "Выдача потерялась — бот перезапускался.\n"
+            "Нажми «Найти клиентов» — город и ниша уже кнопками."
+        )
+        return
+
+    try:
+        page = int(raw)
+    except ValueError:
+        return
+
+    await _render_page(callback.message, result, page)
+
+
+@router.message(F.text == kb.LAST)
+async def show_last(message: Message) -> None:
+    result = _last_results.get(message.from_user.id)
+    if result is None or not result.companies:
+        await message.answer("Ещё нечего показывать — сначала найди клиентов.")
+        return
+    await _render_page(message, result, page=0, edit=False)
 
 
 @router.message(Command("csv"))
-@router.message(F.text == kb.LAST)
-async def send_last(message: Message) -> None:
+async def send_last_file(message: Message) -> None:
     result = _last_results.get(message.from_user.id)
     if result is None or not result.companies:
         await message.answer("Ещё нечего выгружать — сначала найди клиентов.")
@@ -525,27 +560,37 @@ async def _run_search(
 
     _last_results[user_id] = result
 
-    await status.edit_text(
-        _fit(result),
-        disable_web_page_preview=True,
-        reply_markup=kb.results() if result.companies else None,
+    # Файл не шлём: список читается кнопками прямо в чате. Кому нужна
+    # таблица — «📄 Всё файлом» под выдачей.
+    await _render_page(status, result, page=0)
+
+
+def _fit(result: search.SearchResult, page: int = 0) -> str:
+    """Текст одной страницы выдачи."""
+    return formatting.page_message(
+        result.companies, result.city, result.queries,
+        page=page, source=result.source,
     )
 
-    if result.companies:
-        await _send_csv(message, result)
 
+async def _render_page(
+    message: Message, result: search.SearchResult, page: int, edit: bool = True,
+) -> None:
+    """Рисует страницу выдачи — правкой того же сообщения, а не новым."""
+    page = formatting.clamp_page(page, len(result.companies))
+    markup = (
+        kb.pager(page, formatting.total_pages(len(result.companies)))
+        if result.companies else None
+    )
 
-def _fit(result: search.SearchResult) -> str:
-    """Подбирает размер топа так, чтобы сообщение влезло в лимит Telegram."""
-    for top in (10, 7, 5, 3, 1):
-        text = formatting.results_message(
-            result.companies, result.city, result.queries, top=top, source=result.source,
-        )
-        if len(text) <= MESSAGE_LIMIT:
-            return text
-    return formatting.results_message(
-        result.companies, result.city, result.queries, top=1, source=result.source,
-    )[:MESSAGE_LIMIT]
+    try:
+        send = message.edit_text if edit else message.answer
+        await send(_fit(result, page), reply_markup=markup, disable_web_page_preview=True)
+    except TelegramBadRequest as exc:
+        # «message is not modified» прилетает на двойной тап по стрелке.
+        # Показывать нечего — страница уже та самая.
+        if "not modified" not in str(exc):
+            raise
 
 
 async def _send_csv(message: Message, result: search.SearchResult) -> None:

@@ -100,12 +100,30 @@ def calc_targets() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def results(has_more: bool = False) -> InlineKeyboardMarkup:
-    """Что можно сделать сразу после выдачи."""
+def pager(page: int, pages: int) -> InlineKeyboardMarkup:
+    """Листалка под выдачей плюс что делать дальше.
+
+    Стрелку на краю списка не рисуем: кнопка, которая ничего не делает,
+    читается как поломка. Счётчик посередине — не кнопка, но Telegram
+    других способов показать позицию не даёт.
+    """
     builder = InlineKeyboardBuilder()
-    builder.button(text="📄 Прислать CSV", callback_data="result:csv")
+    row = 0
+
+    if pages > 1:
+        if page > 0:
+            builder.button(text="⬅️ Назад", callback_data=f"page:{page - 1}")
+            row += 1
+        builder.button(text=f"{page + 1}/{pages}", callback_data="page:noop")
+        row += 1
+        if page < pages - 1:
+            builder.button(text="Далее ➡️", callback_data=f"page:{page + 1}")
+            row += 1
+
+    builder.button(text="📄 Всё файлом", callback_data="result:csv")
     builder.button(text="🔁 Другая ниша", callback_data="result:again")
-    builder.adjust(2)
+
+    builder.adjust(*([row, 2] if row else [2]))
     return builder.as_markup()
 
 
