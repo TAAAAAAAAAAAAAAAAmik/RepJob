@@ -21,7 +21,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import requests
 
@@ -43,7 +43,25 @@ class YandexOrg:
 
 
 def maps_search_url(company: Company) -> str:
-    """Ссылка на поиск компании в Яндекс.Картах — открыть и посмотреть."""
+    """Ссылка на Яндекс.Карты, ведущая в конкретную точку.
+
+    Поиск по одному названию открывает что попало: у сетей десятки
+    филиалов, а у «Уюта» или «Гармонии» — тёзки через весь город.
+    Поэтому, когда есть координаты из 2GIS, карта открывается ровно
+    в этой точке, и название ищется уже внутри неё.
+
+    Координаты надёжнее адреса: адрес Яндексу ещё надо разобрать,
+    а точка однозначна.
+    """
+    if company.lat is not None and company.lon is not None:
+        params = {
+            "ll": f"{company.lon},{company.lat}",   # Яндекс ждёт долготу первой
+            "z": "18",
+            "text": company.name or company.address or "",
+        }
+        return "https://yandex.ru/maps/?" + urlencode(params)
+
+    # Без координат остаётся только поиск — но хотя бы с адресом
     parts = [company.name, company.address or company.city]
     query = " ".join(p for p in parts if p)
     return f"https://yandex.ru/maps/?text={quote_plus(query)}"

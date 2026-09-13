@@ -46,9 +46,17 @@ class Company:
 
     extra: dict[str, Any] = field(default_factory=dict, repr=False)
 
+    @property
+    def coords(self) -> str:
+        """Широта и долгота строкой — вставляется в любую карту."""
+        if self.lat is None or self.lon is None:
+            return ""
+        return f"{self.lat:.6f}, {self.lon:.6f}"
+
     def as_row(self) -> dict[str, Any]:
         row = asdict(self)
         row.pop("extra", None)
+        row["coords"] = self.coords
         return row
 
 

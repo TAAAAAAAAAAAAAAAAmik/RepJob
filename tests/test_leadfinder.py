@@ -306,3 +306,60 @@ class YandexMatchTest(unittest.TestCase):
         yandex.enrich([company], FakeClient())
         self.assertIn("yandex.ru/maps/?text=", company.url_yandex)
         self.assertEqual(company.phone_source, "")
+
+
+class MapLinkTest(unittest.TestCase):
+    """Ссылка должна открывать конкретный филиал, а не результаты поиска."""
+
+    def test_coords_open_exact_point(self):
+        company = make(name="22, салон красоты")
+        company.lat, company.lon = 55.823618, 49.104565
+        url = yandex.maps_search_url(company)
+
+        # ll обязателен — без него Яндекс покажет список тёзок по всему городу.
+        self.assertIn("ll=49.104565%2C55.823618", url)   # долгота первой
+        self.assertIn("z=18", url)
+
+    def test_address_used_when_no_coords(self):
+        company = make(name="Уют, салон")
+        company.address = "ул. Мира, 5"
+        url = yandex.maps_search_url(company)
+
+        self.assertIn("yandex.ru/maps/?text=", url)
+        self.assertNotIn("ll=", url)
+        # Адрес в запросе — единственное, что отличает «Уют» от десятка тёзок.
+        self.assertIn("%D0%9C%D0%B8%D1%80%D0%B0", url)   # «Мира» в urlencode
+
+    def test_city_used_when_address_missing(self):
+        company = make(name="Уют, салон")
+        company.city = "Уфа"
+        url = yandex.maps_search_url(company)
+        self.assertIn("yandex.ru/maps/?text=", url)
+        self.assertIn("%D0%A3%D1%84%D0%B0", url)         # «Уфа»
+
+    def test_2gis_link_points_at_branch_card(self):
+        # id филиала до подчёркивания — именно он открывает карточку точки
+        company = dgis.parse_company({
+            "id": "70000001006353769_bba2be4d",
+            "name": "Анюта",
+            "reviews": {"general_rating": 3.6, "general_review_count": 40},
+        })
+        self.assertEqual(company.url_2gis, "https://2gis.ru/firm/70000001006353769")
+
+    def test_enrich_without_client_uses_coords(self):
+        company = make(name="Анюта")
+        company.lat, company.lon = 54.7388, 55.9721
+        yandex.enrich([company], None)
+        self.assertIn("ll=55.9721%2C54.7388", company.url_yandex)
+
+    def test_coords_land_in_csv(self):
+        company = make()
+        company.lat, company.lon = 54.738762, 55.972055
+        self.assertEqual(company.coords, "54.738762, 55.972055")
+        self.assertEqual(make().coords, "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = export.to_csv([company], Path(tmp) / "leads.csv")
+            with path.open(encoding="utf-8-sig") as handle:
+                row = next(csv.DictReader(handle, delimiter=";"))
+        self.assertEqual(row["Координаты"], "54.738762, 55.972055")

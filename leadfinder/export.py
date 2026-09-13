@@ -25,6 +25,7 @@ COLUMNS: list[tuple[str, str]] = [
     ("website", "Сайт"),
     ("url_2gis", "Карточка 2GIS"),
     ("url_yandex", "Карточка Яндекс"),
+    ("coords", "Координаты"),
     ("city", "Город"),
     ("source_id", "ID источника"),
 ]
