@@ -17,8 +17,10 @@ from aiogram.fsm.storage.memory import MemoryStorage  # noqa: E402
 
 from bot import formatting, keyboards, search  # noqa: E402
 from bot.config import Config, _parse_ids  # noqa: E402
-from bot.handlers import AccessMiddleware, MESSAGE_LIMIT, _fit, router  # noqa: E402
-from leadfinder import scoring  # noqa: E402
+from bot.handlers import (  # noqa: E402
+    AccessMiddleware, MESSAGE_LIMIT, _fit, _picked_header, _source_prompt, router,
+)
+from leadfinder import scoring, sources  # noqa: E402
 from leadfinder.cli import load_demo  # noqa: E402
 from leadfinder.models import is_target, reviews_needed_for  # noqa: E402
 
@@ -146,6 +148,8 @@ class WiringTest(unittest.TestCase):
         payloads = set()
         for markup in (
             keyboards.niches(), keyboards.niches(city_known=False),
+            keyboards.rating_sources(), keyboards.rating_sources(city_known=False),
+            keyboards.back_to_sources(),
             keyboards.calc_targets(), keyboards.results(), keyboards.cancel(),
             keyboards.cities(["Казань", "Пермь"]),
             keyboards.admin_panel([(111, {"name": "Гость"})]),
@@ -177,6 +181,63 @@ class WiringTest(unittest.TestCase):
         found = asyncio.run(check())
         orphans = [p for p, name in found.items() if name is None]
         self.assertEqual(orphans, [], f"кнопки без обработчика: {orphans}")
+
+
+class SourceChoiceTest(unittest.TestCase):
+    """Выбор площадки перед поиском.
+
+    Смысл шага в том, что рейтинг у площадок свой: звонок «у вас 3.1»
+    рассыпается, если владелец смотрит на карту, где у него 4.4.
+    """
+
+    def test_keyboard_offers_every_source(self):
+        markup = keyboards.rating_sources()
+        payloads = {b.callback_data for row in markup.inline_keyboard for b in row}
+        for key in sources.SOURCES:
+            self.assertIn(f"src:{key}", payloads)
+
+    def test_unavailable_source_is_shown_not_hidden(self):
+        # Убрать Яндекс из списка — значит получать вопрос «а где он» каждую
+        # неделю. Кнопка есть, и по ней приходит объяснение.
+        markup = keyboards.rating_sources()
+        payloads = {b.callback_data for row in markup.inline_keyboard for b in row}
+        self.assertIn("src:yandex", payloads)
+        self.assertFalse(sources.YANDEX.available)
+        self.assertTrue(sources.YANDEX.why_not)
+
+    def test_only_two_gis_can_actually_be_searched(self):
+        # У Яндекса в API нет полей рейтинга — фильтровать нечем
+        self.assertEqual([s.key for s in sources.searchable()], ["2gis", "2gis_org"])
+
+    def test_prompt_names_every_source(self):
+        text = _source_prompt("Уфа")
+        self.assertIn("Уфа", text)
+        for source in sources.SOURCES.values():
+            self.assertIn(source.caption, text)
+
+    def test_header_after_choice_names_the_platform(self):
+        header = _picked_header("Уфа", "2gis_org")
+        self.assertIn("Уфа", header)
+        self.assertIn("2ГИС, организация", header)
+
+    def test_results_message_names_the_platform(self):
+        leads = demo_leads()
+        text = formatting.results_message(leads, "Казань", ["еда"], source="2gis_org")
+        self.assertIn("2ГИС, организация", text)
+
+    def test_empty_result_still_names_the_platform(self):
+        text = formatting.results_message([], "Казань", ["еда"], source="2gis_org")
+        self.assertIn("2ГИС, организация", text)
+
+    def test_source_survives_into_the_message(self):
+        leads = demo_leads()
+        result = search.SearchResult("Казань", ["еда"], len(leads), leads, source="2gis_org")
+        self.assertIn("2ГИС, организация", _fit(result))
+
+    def test_default_source_when_nothing_chosen(self):
+        leads = demo_leads()
+        result = search.SearchResult("Казань", ["еда"], len(leads), leads)
+        self.assertEqual(result.source, sources.DEFAULT)
 
 
 if __name__ == "__main__":

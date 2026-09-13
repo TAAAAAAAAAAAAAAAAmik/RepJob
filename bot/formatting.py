@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape
 
+from leadfinder import sources
 from leadfinder.models import Company
 
 VERDICT_MARK = {
@@ -45,13 +46,23 @@ def lead_line(company: Company, index: int) -> str:
     return "\n".join(lines)
 
 
-def results_message(companies: list[Company], city: str, queries: list[str], top: int = 10) -> str:
+def results_message(
+    companies: list[Company],
+    city: str,
+    queries: list[str],
+    top: int = 10,
+    source: str = sources.DEFAULT,
+) -> str:
     """Сводка плюс верхушка списка."""
+    caption = sources.title_of(source)
+
     if not companies:
         return (
-            f"По запросу <b>{escape(city)}</b> под фильтр не попал никто.\n\n"
-            "Попробуй расширить диапазон: <code>/find</code> и выбрать другую нишу, "
-            "или снизить порог отзывов настройкой <code>BOT_MIN_REVIEWS</code>."
+            f"По запросу <b>{escape(city)}</b> под фильтр не попал никто "
+            f"(рейтинг смотрели: {escape(caption)}).\n\n"
+            "Попробуй другую нишу, другую площадку — по организации в сетях "
+            "цифры ниже — или снизь порог отзывов настройкой "
+            "<code>BOT_MIN_REVIEWS</code>."
         )
 
     hot = sum(1 for c in companies if c.verdict == "горячий")
@@ -61,6 +72,9 @@ def results_message(companies: list[Company], city: str, queries: list[str], top
 
     header = [
         f"🎯 <b>{escape(city)}</b> — {escape(', '.join(queries))}",
+        # Площадку называем прямо в шапке: с этим числом идти на звонок,
+        # и владелец первым делом спросит, где мы его взяли.
+        f"Рейтинг: <b>{escape(caption)}</b>",
         "",
         f"Отобрано: <b>{len(companies)}</b>   🔥 {hot}   🟢 {work}",
         f"С телефоном: {with_phone} · средний рейтинг {avg:.2f}",

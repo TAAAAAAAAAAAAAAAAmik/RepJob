@@ -16,6 +16,7 @@ from typing import Any, Iterator
 
 import requests
 
+from . import sources
 from .models import Company
 
 log = logging.getLogger(__name__)
@@ -197,22 +198,34 @@ def _extract_contacts(raw: dict[str, Any]) -> tuple[str, str]:
     return phone, website
 
 
-def parse_company(raw: dict[str, Any], city: str = "") -> Company:
+def parse_company(
+    raw: dict[str, Any],
+    city: str = "",
+    rating_source: str = sources.DEFAULT,
+) -> Company:
     """Превращает сырой ответ 2GIS в нашу модель."""
     reviews = raw.get("reviews") or {}
     rubrics = raw.get("rubrics") or []
     point = raw.get("point") or {}
     phone, website = _extract_contacts(raw)
 
-    # Филиальный рейтинг — основной; если его нет, берём общий по организации
-    rating = reviews.get("general_rating")
-    count = reviews.get("general_review_count")
+    rating_branch = reviews.get("general_rating")
+    count_branch = reviews.get("general_review_count") or 0
     rating_org = reviews.get("org_rating")
     count_org = reviews.get("org_review_count") or 0
 
-    if rating is None:
-        rating = rating_org
-        count = count_org
+    # В rating уезжает выбранный охват — по нему пойдут фильтр и скоринг.
+    # Если у выбранного данных нет, берём соседний: карточка совсем без
+    # рейтинга отсеется дальше сама, а вот потерять компанию только из-за
+    # того, что её оценка лежит в другом поле, — это потерянный лид.
+    if rating_source == sources.TWO_GIS_ORG.key:
+        rating, count = rating_org, count_org
+        if rating is None:
+            rating, count = rating_branch, count_branch
+    else:
+        rating, count = rating_branch, count_branch
+        if rating is None:
+            rating, count = rating_org, count_org
 
     source_id = str(raw.get("id", ""))
 
@@ -228,6 +241,9 @@ def parse_company(raw: dict[str, Any], city: str = "") -> Company:
         website=website,
         rating=float(rating) if rating is not None else None,
         review_count=int(count or 0),
+        rating_source=rating_source,
+        rating_branch=float(rating_branch) if rating_branch is not None else None,
+        review_count_branch=int(count_branch),
         rating_org=float(rating_org) if rating_org is not None else None,
         review_count_org=int(count_org),
         lat=point.get("lat"),
@@ -241,6 +257,7 @@ def collect(
     city: str,
     queries: list[str],
     max_pages: int = MAX_PAGES,
+    rating_source: str = sources.DEFAULT,
 ) -> list[Company]:
     """Собирает компании по списку запросов, убирая дубли между рубриками."""
     region_id = client.resolve_region(city)
@@ -252,7 +269,7 @@ def collect(
     for query in queries:
         found = 0
         for raw in client.search(query, region_id, max_pages=max_pages):
-            company = parse_company(raw, city=city)
+            company = parse_company(raw, city=city, rating_source=rating_source)
             if not company.source_id or company.source_id in seen:
                 continue
             seen.add(company.source_id)

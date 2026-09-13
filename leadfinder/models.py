@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
+from . import sources
+
 # Целевой рейтинг, к которому мы ведём клиента. Используется в расчёте
 # потенциала: чем дальше карточка от цели, тем больнее владельцу.
 TARGET_RATING = 4.5
@@ -24,13 +26,18 @@ class Company:
     phone: str = ""
     phone_source: str = ""   # 2gis | yandex
     website: str = ""
-    # 2GIS отдаёт два рейтинга, и они заметно расходятся:
-    #   general_* — карточка конкретного филиала, только отзывы 2GIS
-    #   org_*     — организация целиком, вместе с Flamp
-    # Фильтруем по первому (это то, что видит человек на карточке точки),
-    # но второй кладём рядом — на встрече пригодится оба.
+    # Рейтинг у каждой площадки свой, и цифры расходятся — поэтому
+    # источник выбирается перед поиском (см. leadfinder/sources.py).
+    # В rating/review_count лежит выбранный: по нему идут фильтр,
+    # скоринг и выдача. Оба охвата 2GIS при этом всегда рядом:
+    #   branch — карточка конкретной точки, только отзывы 2GIS
+    #   org    — организация целиком, вместе с Flamp
+    # На встрече пригождаются оба: расхождение само по себе аргумент.
     rating: float | None = None
     review_count: int = 0
+    rating_source: str = sources.DEFAULT
+    rating_branch: float | None = None
+    review_count_branch: int = 0
     rating_org: float | None = None
     review_count_org: int = 0
     lat: float | None = None
@@ -57,6 +64,7 @@ class Company:
         row = asdict(self)
         row.pop("extra", None)
         row["coords"] = self.coords
+        row["rating_source_title"] = sources.title_of(self.rating_source)
         return row
 
 

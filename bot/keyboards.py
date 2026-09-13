@@ -11,6 +11,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from leadfinder.presets import PRESETS
+from leadfinder.sources import SOURCES
 
 # Подписи главного меню. Вынесены в константы, потому что по ним же
 # ловятся нажатия в хендлерах — разъедутся, и меню перестанет работать.
@@ -62,15 +63,32 @@ def cities(recent: list[str]) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def rating_sources(city_known: bool = True) -> InlineKeyboardMarkup:
+    """Где смотрим рейтинг.
+
+    Недоступные площадки показываем тоже. Если просто убрать Яндекс из
+    списка, вопрос «а почему его нет» возвращается каждую неделю —
+    пусть кнопка будет и отвечает сама.
+    """
+    builder = InlineKeyboardBuilder()
+    for source in SOURCES.values():
+        builder.button(text=source.title, callback_data=f"src:{source.key}")
+    if city_known:
+        builder.button(text="↩️ Сменить город", callback_data="back:city")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def niches(city_known: bool = True) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for key in PRESETS:
         builder.button(text=NICHE_TITLES.get(key, key), callback_data=f"niche:{key}")
     builder.button(text="✏️ Своя ниша", callback_data="niche:__custom__")
     builder.button(text="🌐 Все ниши сразу", callback_data="niche:__all__")
+    builder.button(text="↩️ Сменить площадку", callback_data="back:src")
     if city_known:
         builder.button(text="↩️ Сменить город", callback_data="back:city")
-    builder.adjust(2, 2, 2, 1, 1, 1)
+    builder.adjust(2, 2, 2, 1, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -89,6 +107,13 @@ def results(has_more: bool = False) -> InlineKeyboardMarkup:
     builder.button(text="🔁 Другая ниша", callback_data="result:again")
     builder.adjust(2)
     return builder.as_markup()
+
+
+def back_to_sources() -> InlineKeyboardMarkup:
+    """Единственный выход из объяснения, почему площадка не ищется."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ Выбрать другую", callback_data="back:src"),
+    ]])
 
 
 def cancel() -> InlineKeyboardMarkup:

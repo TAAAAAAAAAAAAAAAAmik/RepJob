@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import dgis, export, presets, scoring, yandex
+from . import dgis, export, presets, scoring, sources, yandex
 from .models import Company, is_target
 
 DEMO_FIXTURE = Path(__file__).parent / "data" / "demo_2gis.json"
@@ -35,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=["красота"],
         help="Пресеты ниш или произвольные запросы через пробел",
+    )
+    parser.add_argument(
+        "--rating-source", default=sources.DEFAULT,
+        choices=[s.key for s in sources.searchable()],
+        help="Где смотреть рейтинг: 2gis — карточка филиала, 2gis_org — организация целиком",
     )
     parser.add_argument("--rating-min", type=float, default=3.0, help="Нижняя граница рейтинга (по умолчанию 3.0)")
     parser.add_argument("--rating-max", type=float, default=4.2, help="Верхняя граница рейтинга (по умолчанию 4.2)")
@@ -89,7 +94,10 @@ def run(args: argparse.Namespace) -> int:
 
         client = dgis.DgisClient(api_key)
         try:
-            companies = dgis.collect(client, args.city, queries, max_pages=args.max_pages)
+            companies = dgis.collect(
+                client, args.city, queries,
+                max_pages=args.max_pages, rating_source=args.rating_source,
+            )
         except dgis.DgisError as exc:
             print(f"Ошибка 2GIS: {exc}", file=sys.stderr)
             return 1

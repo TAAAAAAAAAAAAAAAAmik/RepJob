@@ -13,7 +13,7 @@ import logging
 import os
 from dataclasses import dataclass
 
-from leadfinder import dgis, presets, scoring, yandex
+from leadfinder import dgis, presets, scoring, sources, yandex
 from leadfinder.export import COLUMNS
 from leadfinder.models import Company, is_target
 
@@ -30,6 +30,7 @@ class SearchResult:
     queries: list[str]
     found_total: int
     companies: list[Company]
+    source: str = sources.DEFAULT   # на какой площадке смотрели рейтинг
 
 
 def _run_search(
@@ -39,10 +40,13 @@ def _run_search(
     max_pages: int,
     max_results: int,
     yandex_key: str = "",
+    rating_source: str = sources.DEFAULT,
 ) -> SearchResult:
     """Синхронная часть — выполняется в отдельном потоке."""
     client = dgis.DgisClient(api_key)
-    companies = dgis.collect(client, city, queries, max_pages=max_pages)
+    companies = dgis.collect(
+        client, city, queries, max_pages=max_pages, rating_source=rating_source,
+    )
 
     selected = [
         c for c in companies
@@ -58,6 +62,7 @@ def _run_search(
         queries=queries,
         found_total=len(companies),
         companies=selected,
+        source=rating_source,
     )
 
 
@@ -68,6 +73,7 @@ async def find(
     max_pages: int = 5,
     max_results: int = 60,
     yandex_key: str = "",
+    rating_source: str = sources.DEFAULT,
 ) -> SearchResult:
     """Ищет лидов, не блокируя бота."""
     if niche == "__all__":
@@ -77,7 +83,8 @@ async def find(
         queries = presets.resolve([part for part in niche.split(",") if part.strip()])
 
     return await asyncio.to_thread(
-        _run_search, api_key, city, queries, max_pages, max_results, yandex_key,
+        _run_search, api_key, city, queries, max_pages, max_results,
+        yandex_key, rating_source,
     )
 
 

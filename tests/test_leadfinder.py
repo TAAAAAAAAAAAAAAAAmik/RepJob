@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from leadfinder import dgis, export, presets, scoring, yandex  # noqa: E402
+from leadfinder import dgis, export, presets, scoring, sources, yandex  # noqa: E402
 from leadfinder.cli import load_demo  # noqa: E402
 from leadfinder.models import Company, is_target, reviews_needed_for  # noqa: E402
 
@@ -363,3 +363,70 @@ class MapLinkTest(unittest.TestCase):
             with path.open(encoding="utf-8-sig") as handle:
                 row = next(csv.DictReader(handle, delimiter=";"))
         self.assertEqual(row["Координаты"], "54.738762, 55.972055")
+
+
+class RatingSourceTest(unittest.TestCase):
+    """Выбор площадки: по какому рейтингу идёт отбор.
+
+    Цифры у площадок и охватов разные, и это не мелочь: сетевая точка
+    с 3.1 на карточке может иметь 3.8 по организации — попадёт она
+    в выдачу или нет, зависит от того, что выбрали.
+    """
+
+    RAW = {
+        "id": "70000001_x",
+        "name": "Шаверма по-питерски",
+        "reviews": {
+            "general_rating": 3.1, "general_review_count": 318,
+            "org_rating": 4.4, "org_review_count": 4200,
+        },
+    }
+
+    def test_branch_is_the_default(self):
+        company = dgis.parse_company(self.RAW)
+        self.assertEqual(company.rating, 3.1)
+        self.assertEqual(company.review_count, 318)
+        self.assertEqual(company.rating_source, sources.DEFAULT)
+
+    def test_org_scope_changes_the_working_number(self):
+        company = dgis.parse_company(self.RAW, rating_source="2gis_org")
+        self.assertEqual(company.rating, 4.4)
+        self.assertEqual(company.review_count, 4200)
+
+    def test_both_scopes_stay_available_either_way(self):
+        # Расхождение между охватами — готовый аргумент на встрече,
+        # поэтому вторая цифра не теряется при любом выборе.
+        for key in ("2gis", "2gis_org"):
+            company = dgis.parse_company(self.RAW, rating_source=key)
+            self.assertEqual((company.rating_branch, company.review_count_branch), (3.1, 318))
+            self.assertEqual((company.rating_org, company.review_count_org), (4.4, 4200))
+
+    def test_choice_decides_whether_the_lead_passes(self):
+        # 3.1 — в рабочем диапазоне, 4.4 — уже нет
+        self.assertTrue(is_target(dgis.parse_company(self.RAW)))
+        self.assertFalse(is_target(dgis.parse_company(self.RAW, rating_source="2gis_org")))
+
+    def test_missing_scope_falls_back_instead_of_losing_the_lead(self):
+        raw = {"id": "1", "name": "Одиночка",
+               "reviews": {"general_rating": 3.4, "general_review_count": 48}}
+        company = dgis.parse_company(raw, rating_source="2gis_org")
+        self.assertEqual(company.rating, 3.4)   # org-данных нет — взяли филиал
+
+    def test_unknown_key_does_not_break_the_search(self):
+        # Ключ приезжает из callback_data: кнопка из старой версии бота
+        # не должна ронять поиск.
+        self.assertEqual(sources.get("телепортация").key, sources.DEFAULT)
+        company = dgis.parse_company(self.RAW, rating_source="ерунда")
+        self.assertEqual(company.rating, 3.1)
+
+    def test_csv_says_where_the_number_came_from(self):
+        company = dgis.parse_company(self.RAW, city="Уфа", rating_source="2gis_org")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = export.to_csv([company], Path(tmp) / "leads.csv")
+            with path.open(encoding="utf-8-sig") as handle:
+                row = next(csv.DictReader(handle, delimiter=";"))
+
+        self.assertEqual(row["Где смотрели"], "2ГИС, организация")
+        self.assertEqual(row["Рейтинг"], "4.4")
+        self.assertEqual(row["Рейтинг филиала"], "3.1")
+        self.assertEqual(row["Рейтинг организации"], "4.4")

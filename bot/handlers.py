@@ -13,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message, TelegramObject
 
-from leadfinder import dgis
+from leadfinder import dgis, sources
 from leadfinder.models import reviews_needed_for
 
 from . import formatting, keyboards as kb, search
@@ -36,8 +36,10 @@ _last_results: dict[int, search.SearchResult] = {}
 
 HELP = """<b>Поиск клиентов на работу с репутацией</b>
 
-<b>{find}</b> — подобрать компании: город, потом ниша кнопками.
-Города запоминаются, повторный поиск в два тапа.
+<b>{find}</b> — подобрать компании: город, площадка, ниша — всё кнопками.
+Города запоминаются, повторный поиск в три тапа.
+
+Площадку спрашиваем не зря: рейтинг у 2ГИС и Яндекса свой и расходится. Идти на звонок с цифрой, не зная, откуда она, — значит услышать «а у меня на Яндексе 4.4» и закончить разговор. У Яндекса оценки нет в API, поэтому отбор идёт по 2ГИС, а ссылка на Яндекс стоит у каждого лида — свериться глазами.
 
 <b>{calc}</b> — сколько пятёрок нужно до цели и за сколько месяцев.
 Самое полезное на встрече: считает при клиенте за пару секунд.
@@ -190,7 +192,7 @@ async def picked_city(
 
     await state.update_data(city=city)
     await callback.message.edit_text(
-        f"Город: <b>{city}</b>\nТеперь ниша:", reply_markup=kb.niches(),
+        _source_prompt(city), reply_markup=kb.rating_sources(),
     )
 
 
@@ -202,7 +204,7 @@ async def typed_city(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(city=city)
-    await message.answer(f"Город: <b>{city}</b>\nТеперь ниша:", reply_markup=kb.niches())
+    await message.answer(_source_prompt(city), reply_markup=kb.rating_sources())
 
 
 @router.callback_query(F.data == "back:city")
@@ -218,6 +220,78 @@ async def back_to_city(callback: CallbackQuery, state: FSMContext, storage: Stor
         await callback.message.edit_text("Напиши название города.")
 
 
+def _source_prompt(city: str) -> str:
+    """Экран выбора площадки.
+
+    Вопрос задаётся каждый поиск не для красоты: рейтинг у площадок свой,
+    и звонок «у вас 3.1» проваливается, если владелец смотрит на другую
+    карту, где у него 4.4.
+    """
+    lines = [
+        f"Город: <b>{escape(city)}</b>",
+        "",
+        "Где смотрим рейтинг? Цифры на площадках расходятся — "
+        "кафе с 3.1 в 2ГИС спокойно бывает 4.4 в Яндексе.",
+        "",
+    ]
+    lines += [
+        f"<b>{escape(s.caption)}</b> — {escape(s.note)}"
+        for s in sources.SOURCES.values()
+    ]
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data.startswith("src:"))
+async def picked_source(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+
+    data = await state.get_data()
+    city = data.get("city")
+    if not city:
+        await callback.message.edit_text("Потерял город. Нажми «Найти клиентов» заново.")
+        await state.clear()
+        return
+
+    source = sources.get(callback.data.split(":", 1)[1])
+
+    # Площадка без рейтинга в API — тупик, но объяснимый: показываем, почему,
+    # и оставляем один выход обратно к выбору.
+    if not source.available:
+        await callback.message.edit_text(
+            f"<b>{escape(source.caption)}</b>\n\n{escape(source.why_not)}",
+            reply_markup=kb.back_to_sources(),
+            disable_web_page_preview=True,
+        )
+        return
+
+    await state.update_data(source=source.key)
+    await callback.message.edit_text(
+        _picked_header(city, source.key) + "\n\nТеперь ниша:",
+        reply_markup=kb.niches(),
+    )
+
+
+@router.callback_query(F.data == "back:src")
+async def back_to_source(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+
+    data = await state.get_data()
+    city = data.get("city")
+    if not city:
+        await callback.message.edit_text("Потерял город. Нажми «Найти клиентов» заново.")
+        await state.clear()
+        return
+
+    await callback.message.edit_text(_source_prompt(city), reply_markup=kb.rating_sources())
+
+
+def _picked_header(city: str, source_key: str) -> str:
+    return (
+        f"Город: <b>{escape(city)}</b>\n"
+        f"Рейтинг: <b>{escape(sources.title_of(source_key))}</b>"
+    )
+
+
 @router.callback_query(F.data.startswith("niche:"))
 async def picked_niche(
     callback: CallbackQuery, state: FSMContext, config: Config, storage: Storage,
@@ -231,12 +305,13 @@ async def picked_niche(
         await state.clear()
         return
 
+    source_key = data.get("source", sources.DEFAULT)
     niche = callback.data.split(":", 1)[1]
 
     if niche == "__custom__":
         await state.set_state(Flow.custom)
         await callback.message.edit_text(
-            f"Город: <b>{escape(city)}</b>\n\n"
+            _picked_header(city, source_key) + "\n\n"
             "Напиши, что искать. Одним словом или фразой, как искал бы в 2GIS:\n"
             "<code>стоматология</code>, <code>ремонт обуви</code>, <code>вет клиника</code>\n\n"
             "Можно несколько через запятую — тогда будет шире, но и запросов уйдёт больше."
@@ -249,7 +324,10 @@ async def picked_niche(
     if callback.message.reply_markup:
         await callback.message.edit_reply_markup(reply_markup=None)
 
-    await _run_search(callback.message, config, city, niche, user_id=callback.from_user.id)
+    await _run_search(
+        callback.message, config, city, niche,
+        user_id=callback.from_user.id, rating_source=source_key,
+    )
 
 
 @router.message(Flow.custom, F.text, NOT_MENU)
@@ -268,9 +346,13 @@ async def typed_niche(
         await message.answer("Потерял город. Нажми «Найти клиентов» заново.")
         return
 
+    source_key = data.get("source", sources.DEFAULT)
     await state.clear()
     storage.remember_city(message.from_user.id, city)
-    await _run_search(message, config, city, query, user_id=message.from_user.id)
+    await _run_search(
+        message, config, city, query,
+        user_id=message.from_user.id, rating_source=source_key,
+    )
 
 
 @router.callback_query(F.data == "result:again")
@@ -282,9 +364,10 @@ async def search_again(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.answer("Сначала найди клиентов.")
         return
 
-    await state.update_data(city=result.city)
+    await state.update_data(city=result.city, source=result.source)
     await callback.message.answer(
-        f"Город: <b>{result.city}</b>\nВыбери нишу:", reply_markup=kb.niches(),
+        _picked_header(result.city, result.source) + "\n\nВыбери нишу:",
+        reply_markup=kb.niches(),
     )
 
 
@@ -414,9 +497,13 @@ async def _run_search(
     city: str,
     niche: str,
     user_id: int | None = None,
+    rating_source: str = sources.DEFAULT,
 ) -> None:
     user_id = user_id or message.chat.id
-    status = await message.answer(f"Ищу в городе <b>{city}</b>… это займёт до минуты.")
+    status = await message.answer(
+        f"Ищу в городе <b>{escape(city)}</b> по рейтингу "
+        f"<b>{escape(sources.title_of(rating_source))}</b>… это займёт до минуты."
+    )
 
     try:
         result = await search.find(
@@ -426,6 +513,7 @@ async def _run_search(
             max_pages=config.max_pages,
             max_results=config.max_results,
             yandex_key=config.yandex_api_key,
+            rating_source=rating_source,
         )
     except dgis.DgisError as exc:
         await status.edit_text(f"2GIS ответил ошибкой:\n<code>{exc}</code>")
@@ -450,10 +538,14 @@ async def _run_search(
 def _fit(result: search.SearchResult) -> str:
     """Подбирает размер топа так, чтобы сообщение влезло в лимит Telegram."""
     for top in (10, 7, 5, 3, 1):
-        text = formatting.results_message(result.companies, result.city, result.queries, top=top)
+        text = formatting.results_message(
+            result.companies, result.city, result.queries, top=top, source=result.source,
+        )
         if len(text) <= MESSAGE_LIMIT:
             return text
-    return formatting.results_message(result.companies, result.city, result.queries, top=1)[:MESSAGE_LIMIT]
+    return formatting.results_message(
+        result.companies, result.city, result.queries, top=1, source=result.source,
+    )[:MESSAGE_LIMIT]
 
 
 async def _send_csv(message: Message, result: search.SearchResult) -> None:
